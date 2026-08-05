@@ -1,0 +1,8 @@
+// assignment_chains.gopi - right-associative chained assignment
+
+void main() {
+    int a;
+    int b;
+    a = b = 5;
+    print(a);
+}

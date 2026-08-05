@@ -1,0 +1,14 @@
+// if_with_else.gopi
+// Expected: 0 diagnostics.
+// Every possible outcome of the condition assigns x (the then-branch and the
+// else-branch both do), so x is definitely assigned no matter which path ran.
+
+void main() {
+    int x;
+    if (true) {
+        x = 5;
+    } else {
+        x = 6;
+    }
+    print(x);
+}

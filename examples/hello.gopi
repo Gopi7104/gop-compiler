@@ -1,0 +1,5 @@
+// hello.gopi - a first GopiLang program
+
+void main() {
+    print("Hello, GopiLang!");
+}

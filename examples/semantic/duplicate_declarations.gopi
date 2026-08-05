@@ -1,0 +1,19 @@
+// duplicate_declarations.gopi
+// Expected: 2 diagnostics (both SEMANTIC):
+//   1. "function 'add' is already declared" (Pass 1, top-level).
+//   2. "variable 'x' is already declared in this scope" (Pass 2, same scope —
+//      not shadowing, since both declarations are at the same nesting level).
+
+int add(int a, int b) {
+    return a + b;
+}
+
+int add(int a, int b) {
+    return a - b;
+}
+
+void main() {
+    int x = 1;
+    int x = 2;
+    print(x);
+}

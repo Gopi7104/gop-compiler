@@ -1,0 +1,12 @@
+// nested_blocks.gopi
+// Expected: 0 diagnostics.
+// A bare nested block executes unconditionally (unlike an if/while branch),
+// so an assignment made inside it is visible to code after the block ends.
+
+void main() {
+    int x;
+    {
+        x = 5;
+    }
+    print(x);
+}
