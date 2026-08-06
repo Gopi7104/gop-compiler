@@ -1,6 +1,0 @@
-// arithmetic.gopi - operator precedence and associativity
-
-none main() {
-    show(1 + 2 * 3);
-    show((1 + 2) * 3);
-}

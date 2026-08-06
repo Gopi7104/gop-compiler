@@ -30,9 +30,7 @@ $ ./gopic examples/factorial.gopi
 - **A stack-based virtual machine** with call frames, a shared instruction stream, and full function-call/recursion support.
 - **Rich diagnostics** with source-line rendering and caret underlines for lexical, syntax, and semantic errors.
 - **A disassembler** for inspecting exactly what the compiler generated, without needing to run it.
-- **Language features**: static types (`num`, `dec`, `flag`, `text`, `none`), arrays of any non-`none` type, variables, arithmetic and comparison operators, `if`/`else`, `loop`, `run` (a C-style for-loop, desugared to `loop` at parse time), user-defined functions, recursion, and `show`.
-
-Known gap (tracked, not hidden): `&&`/`||` parse and type-check correctly but are not yet compiled to bytecode — see [Future Roadmap](#future-roadmap).
+- **Language features**: static types (`num`, `dec`, `flag`, `text`, `none`), arrays of any non-`none` type, variables, arithmetic and comparison operators, short-circuiting `&&`/`||`, `if`/`else`, `loop`, `run` (a C-style for-loop, desugared to `loop` at parse time), user-defined functions, recursion, and `show`.
 
 ## Compiler Architecture
 
@@ -409,7 +407,8 @@ See [`examples/semantic/`](examples/semantic) for programs that each demonstrate
 
 Tracked, deliberate gaps — not oversights:
 
-- **`&&` / `||` short-circuit compilation.** Both operators parse and type-check correctly today; `CodeGenerator` throws `UnsupportedOperationException` for them because short-circuit evaluation needs conditional jumps interleaved with the right operand's code, a different shape than every other binary operator (which unconditionally compiles both sides first).
+- **Struct types** — in progress, across several small milestones. Currently landed (Milestone S1): top-level `struct Name { field* }` declarations, with duplicate-struct-name and duplicate-field-name checking. **Not yet usable**: a struct name cannot be used as a field/parameter/variable/return type, there is no construction syntax, and there is no field access or assignment — see [LANGUAGE.md's Structs section](LANGUAGE.md#structs).
+- **`&&` / `||` short-circuit compilation** was tracked here as a known gap and is now implemented — both operators compile to conditional jumps (reusing `JMP`/`JMP_IF_FALSE`, no new opcodes) that skip the right operand entirely when the left already determines the result, identical to Java/C evaluation order; a `.gopi`-level regression example is in [`short_circuit.gopi`](examples/short_circuit.gopi).
 - **Chained assignment's `DUP` opcode** was anticipated from the original bytecode design and is implemented; a `.gopi`-level regression example is in [`assignment_chains.gopi`](examples/assignment_chains.gopi).
 - **Bytecode serialization** (`BytecodeWriter`/`BytecodeReader`) — writing a `BytecodeModule` to a `.gbc` file and reading it back, so compilation and execution can be separate steps.
 - **Self-hosting** — the long-term goal of rewriting this compiler in GopiLang itself, once the language is expressive enough to do so.

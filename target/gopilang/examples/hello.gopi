@@ -1,5 +1,0 @@
-// hello.gopi - a first GopiLang program
-
-none main() {
-    show("Hello, GopiLang!");
-}

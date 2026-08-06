@@ -1,6 +1,8 @@
 package com.gopilang.parser;
 
+import com.gopilang.ast.Parameter;
 import com.gopilang.ast.Program;
+import com.gopilang.ast.StructDeclaration;
 import com.gopilang.lexer.Lexer;
 import com.gopilang.printer.AstPrinter;
 import org.junit.jupiter.api.Nested;
@@ -481,6 +483,127 @@ class ParserTest {
         void missingParenthesesIsAParseError() {
             Parser parser = new Parser(new Lexer(
                     "none main() { run num i = 0; i < 5; i = i + 1) { show(i); } }").scanTokens());
+            parser.parseProgram();
+            assertTrue(parser.reporter().hasErrors());
+        }
+    }
+
+    // Structs (Milestone S1, v3): top-level struct declarations only — no
+    // struct-typed fields/variables, no construction, no field access yet
+    // (all explicitly out of scope for this milestone). Fields are plain
+    // Parameters, the exact same shape as function parameters, so these
+    // tests mirror FunctionParsing's own shape closely.
+    @Nested
+    class Structs {
+
+        @Test
+        void emptyStruct() {
+            assertEquals("""
+                    Program
+                    ├── StructDeclaration Empty
+                    └── FunctionDeclaration main() -> VOID
+                        └── BlockStatement
+                    """, parseAndPrint("struct Empty { } none main() { }"));
+        }
+
+        @Test
+        void structWithOneField() {
+            assertEquals("""
+                    Program
+                    ├── StructDeclaration Point
+                    │   └── Parameter INT x
+                    └── FunctionDeclaration main() -> VOID
+                        └── BlockStatement
+                    """, parseAndPrint("struct Point { num x; } none main() { }"));
+        }
+
+        @Test
+        void structWithManyFields() {
+            assertEquals("""
+                    Program
+                    ├── StructDeclaration Point
+                    │   ├── Parameter INT x
+                    │   ├── Parameter INT y
+                    │   └── Parameter STRING label
+                    └── FunctionDeclaration main() -> VOID
+                        └── BlockStatement
+                    """, parseAndPrint("struct Point { num x; num y; text label; } none main() { }"));
+        }
+
+        @Test
+        void duplicateFieldNameParsesStructurally() {
+            // The parser has no duplicate-name concept of its own (matching
+            // how it never rejects duplicate function names either) — both
+            // fields appear in the tree exactly as written. Semantic
+            // analysis, not the parser, is what rejects this (see
+            // SemanticAnalyzerTest.Structs).
+            assertEquals("""
+                    Program
+                    ├── StructDeclaration Point
+                    │   ├── Parameter INT x
+                    │   └── Parameter INT x
+                    └── FunctionDeclaration main() -> VOID
+                        └── BlockStatement
+                    """, parseAndPrint("struct Point { num x; num x; } none main() { }"));
+        }
+
+        @Test
+        void multipleStructDeclarations() {
+            assertEquals("""
+                    Program
+                    ├── StructDeclaration Point
+                    │   └── Parameter INT x
+                    ├── StructDeclaration Line
+                    │   └── Parameter INT length
+                    └── FunctionDeclaration main() -> VOID
+                        └── BlockStatement
+                    """, parseAndPrint(
+                    "struct Point { num x; } struct Line { num length; } none main() { }"));
+        }
+
+        @Test
+        void structDeclarationSourceRangeSpansKeywordToClosingBrace() {
+            Parser parser = new Parser(new Lexer("struct Point {\n    num x;\n}").scanTokens());
+            Program program = parser.parseProgram();
+            assertFalse(parser.reporter().hasErrors());
+
+            StructDeclaration point = program.structs().get(0);
+            assertEquals(1, point.range().start().line());
+            assertEquals(1, point.range().start().column());
+            assertEquals(3, point.range().end().line());
+            assertEquals(1, point.range().end().column());
+        }
+
+        @Test
+        void fieldSourceRangeSpansTypeToSemicolon() {
+            Parser parser = new Parser(new Lexer("struct Point {\n    num x;\n}").scanTokens());
+            Program program = parser.parseProgram();
+            assertFalse(parser.reporter().hasErrors());
+
+            Parameter field = program.structs().get(0).fields().get(0);
+            assertEquals(2, field.range().start().line());
+            assertEquals(5, field.range().start().column());
+            assertEquals(2, field.range().end().line());
+            assertEquals(10, field.range().end().column());
+        }
+
+        @Test
+        void missingStructNameIsAParseError() {
+            Parser parser = new Parser(new Lexer("struct { num x; } none main() { }").scanTokens());
+            parser.parseProgram();
+            assertTrue(parser.reporter().hasErrors());
+        }
+
+        @Test
+        void missingFieldSemicolonIsAParseError() {
+            Parser parser = new Parser(new Lexer("struct Point { num x } none main() { }").scanTokens());
+            parser.parseProgram();
+            assertTrue(parser.reporter().hasErrors());
+        }
+
+        @Test
+        void missingClosingBraceIsAParseError() {
+            Parser parser = new Parser(new Lexer("struct Point { num x; none main() { }").scanTokens());
             parser.parseProgram();
             assertTrue(parser.reporter().hasErrors());
         }

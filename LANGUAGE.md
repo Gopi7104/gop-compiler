@@ -18,6 +18,7 @@ Every reserved word in GopiLang, at a glance (see the linked section for full de
 | `loop`  | while-loop ([`loop`](#loop)) |
 | `run`   | C-style for-loop, desugared to `loop` ([`run`](#run)) |
 | `new`   | array creation (`new elementType[size]`) ([Arrays](#arrays)) |
+| `struct` | struct declaration ([Structs](#structs)) |
 | `give`  | return statement ([Functions](#functions)) |
 | `show`  | print statement ([`show`](#show)) |
 
@@ -109,6 +110,31 @@ Arithmetic and comparison operators do not accept array operands (`a + b` where 
 
 There is no array-literal syntax (e.g. `[1, 2, 3]`) — every array is created with `new`, then filled in by assignment.
 
+## Structs
+
+**Status: declarations only.** A `struct` can be declared and its fields are checked for duplicates, but structs are **not yet usable anywhere else in the language** — this is the first of several milestones building up full struct support.
+
+```
+struct Point {
+    num x;
+    num y;
+}
+```
+
+Each field is a type and a name, exactly like a function parameter (`type IDENTIFIER;`). A struct may have zero or more fields, and multiple structs may be declared in one file, in any order.
+
+Currently supported:
+- Declaring a struct with any number of fields, each of a primitive type (`num`, `dec`, `flag`, `text`, `none`)
+- Duplicate struct names are a compile-time error
+- Duplicate field names within one struct are a compile-time error (fields in *different* structs may share a name freely — each struct's fields are their own namespace)
+- A struct name may be reused as a function name with no conflict — structs and functions are resolved in separate contexts
+
+**Explicitly not yet supported** (planned for later milestones, not oversights):
+- A struct name cannot be used as a field type, parameter type, variable type, or return type
+- There is no struct construction syntax (no `new Point(...)` yet)
+- There is no field access (`point.x`) or field assignment (`point.x = 5`) yet
+- A struct field cannot itself be another struct
+
 ## Variables
 
 Declared with an explicit type, optionally with an initializer:
@@ -132,7 +158,15 @@ A variable declared in an inner scope may not shadow a variable of the same name
 `==`/`!=` work on any two operands of compatible type (numeric-vs-numeric, `flag`-vs-`flag`, `text`-vs-`text`, by value for strings). `<` `>` `<=` `>=` are numeric-only.
 
 **Logical**: `&&` `||` `!`
-`!` (logical NOT) is fully implemented. `&&`/`||` parse and type-check correctly (both operands must be `flag`) but are not yet compiled to executable bytecode — see the [README's roadmap](README.md#future-roadmap).
+Both operands of `&&`/`||` must be `flag`. All three are fully implemented, including short-circuit evaluation for `&&`/`||`, identical to Java/C: `a && b` never evaluates `b` if `a` is already `no`, and `a || b` never evaluates `b` if `a` is already `yes`.
+
+```
+flag isValid(num x) {
+    give x > 0 && x < 100;
+}
+```
+
+See [`short_circuit.gopi`](examples/short_circuit.gopi) for a worked example showing exactly which calls do and don't happen.
 
 **Assignment**: `=`
 Assignment is itself an expression (not just a statement), and is right-associative, so chained assignment works:
@@ -260,13 +294,17 @@ A built-in statement (not a function) that evaluates its expression and writes i
 Informal EBNF-style summary of the current grammar (see [`Parser.java`](src/main/java/com/gopilang/parser/Parser.java) for the authoritative hand-written recursive-descent implementation):
 
 ```
-program        ::= functionDecl* EOF
+program        ::= (functionDecl | structDecl)* EOF
+
+structDecl     ::= "struct" IDENTIFIER "{" field* "}"
+field          ::= type IDENTIFIER ";"                 // identical shape to `parameter` below
 
 functionDecl   ::= type IDENTIFIER "(" parameters? ")" block
 parameters     ::= parameter ("," parameter)*
 parameter      ::= type IDENTIFIER
 type           ::= elementType ( "[" "]" )?
 elementType    ::= "num" | "dec" | "flag" | "text" | "none"
+                  // NOT YET: a struct name — structs aren't usable as types anywhere yet
 
 block          ::= "{" statement* "}"
 statement      ::= variableDecl | ifStmt | whileStmt | forStmt | returnStmt

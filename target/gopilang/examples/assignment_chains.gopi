@@ -1,8 +1,0 @@
-// assignment_chains.gopi - right-associative chained assignment
-
-none main() {
-    num a;
-    num b;
-    a = b = 5;
-    show(a);
-}

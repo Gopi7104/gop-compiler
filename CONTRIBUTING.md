@@ -33,7 +33,7 @@ mvn test -Dtest=ParserTest#elseAttachesToNearestIf
 mvn test -Dtest='ParserTest$DanglingElse#elseAttachesToNearestIf'
 ```
 
-Every change should leave `mvn compile` and `mvn test` both green. If you add a compiler feature, add a regression test alongside it (see `src/test/java/com/gopilang/` for the existing suites, organized by pipeline stage — `lexer`, `parser`, `semantic`).
+Every change should leave `mvn compile` and `mvn test` both green. If you add a compiler feature, add a regression test alongside it (see `src/test/java/com/gopilang/` for the existing suites, organized by pipeline stage — `lexer`, `parser`, `semantic`, `bytecode`, `vm`).
 
 ## Coding Style
 
@@ -74,5 +74,4 @@ Example `.gopi` programs live in `examples/`, with `examples/semantic/` specific
 
 Not bugs to silently work around — see the [README's roadmap](README.md#future-roadmap) before assuming something is broken:
 
-- `&&`/`||` are fully parsed and type-checked but not yet compiled to bytecode (short-circuit evaluation needs conditional jumps interleaved with the right operand, unlike every other binary operator).
 - Bytecode serialization (`BytecodeWriter`/`BytecodeReader`) doesn't exist yet — a `BytecodeModule` only ever exists in memory within one process run.

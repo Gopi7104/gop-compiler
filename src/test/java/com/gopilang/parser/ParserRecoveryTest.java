@@ -1,6 +1,7 @@
 package com.gopilang.parser;
 
 import com.gopilang.ast.FunctionDeclaration;
+import com.gopilang.ast.Parameter;
 import com.gopilang.ast.Program;
 import com.gopilang.errors.Diagnostic;
 import com.gopilang.errors.ErrorPhase;
@@ -89,5 +90,22 @@ class ParserRecoveryTest {
         assertTrue(parser.reporter().hasErrors());
         String message = parser.reporter().diagnostics().get(0).message();
         assertTrue(message.contains("end of file"), "expected EOF phrasing: " + message);
+    }
+
+    @Test
+    void midStructBodyErrorRecoversWithSiblingFieldsAndFollowingDeclarationsIntact() {
+        // "b;" (missing a type) is the broken field; synchronize(true) skips
+        // exactly it and its own trailing ';', leaving field 'a' before it
+        // and field 'c' after it intact — same "sibling survives" shape as
+        // midBlockStatementErrorRecoversWithSiblingStatementsIntact above,
+        // and main() afterward parses normally too.
+        Parser parser = parserFor("struct S { num a; b; num c; } none main() { show(1); }");
+        Program program = parser.parseProgram();
+
+        assertEquals(List.of("main"), functionNames(program));
+        assertEquals(1, program.structs().size());
+        assertEquals(List.of("a", "c"),
+                program.structs().get(0).fields().stream().map(Parameter::name).collect(Collectors.toList()));
+        assertEquals(1, parser.reporter().diagnostics().size());
     }
 }

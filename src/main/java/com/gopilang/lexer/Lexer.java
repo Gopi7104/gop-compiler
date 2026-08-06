@@ -32,6 +32,7 @@ public final class Lexer {
             Map.entry("give", TokenType.KW_RETURN),
             Map.entry("show", TokenType.KW_PRINT),
             Map.entry("new", TokenType.KW_NEW),
+            Map.entry("struct", TokenType.KW_STRUCT),
             Map.entry("yes", TokenType.BOOLEAN_LITERAL),
             Map.entry("no", TokenType.BOOLEAN_LITERAL)
     );

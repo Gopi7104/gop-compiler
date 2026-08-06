@@ -1,0 +1,41 @@
+// short_circuit.gopi - && and || short-circuit exactly like Java/C: the
+// right operand is only evaluated when its value could actually change the
+// result. Each function below prints its own name so the call order (and
+// which calls never happen at all) is directly observable.
+
+flag no_() {
+    show("no_ called");
+    give no;
+}
+
+flag yes_() {
+    show("yes_ called");
+    give yes;
+}
+
+none main() {
+    show("--- && with a false left operand: right is never called ---");
+    if (no_() && yes_()) {
+        show("unreachable");
+    }
+
+    show("--- && with a true left operand: right runs ---");
+    if (yes_() && yes_()) {
+        show("both true");
+    }
+
+    show("--- || with a true left operand: right is never called ---");
+    if (yes_() || no_()) {
+        show("left alone was enough");
+    }
+
+    show("--- || with a false left operand: right runs ---");
+    if (no_() || yes_()) {
+        show("right saved it");
+    }
+
+    show("--- chained && stops at the first false ---");
+    if (yes_() && no_() && yes_()) {
+        show("unreachable");
+    }
+}

@@ -38,6 +38,7 @@ com/gopilang/semantic/FunctionSymbol.class
 com/gopilang/ast/IfStatement.class
 com/gopilang/ast/ArrayLengthExpression.class
 com/gopilang/vm/VirtualMachine.class
+com/gopilang/semantic/StructSymbol.class
 com/gopilang/ast/ArrayAccessExpression.class
 com/gopilang/lexer/package-info.class
 com/gopilang/ast/BlockStatement.class
@@ -45,6 +46,7 @@ com/gopilang/ast/PrintStatement.class
 com/gopilang/ast/VariableDeclaration.class
 com/gopilang/errors/DiagnosticReporter.class
 com/gopilang/types/package-info.class
+com/gopilang/ast/StructDeclaration.class
 com/gopilang/lexer/Token.class
 com/gopilang/ast/ReturnStatement.class
 com/gopilang/vm/package-info.class

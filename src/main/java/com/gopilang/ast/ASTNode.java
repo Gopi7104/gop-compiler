@@ -8,6 +8,6 @@ import com.gopilang.util.SourceRange;
  * after parsing (see {@code Stmt}/{@code Expr} for the statement/expression
  * sub-hierarchies dispatched over with plain switches, not a Visitor).
  */
-public sealed interface ASTNode permits Program, Parameter, FunctionDeclaration, Stmt, Expr {
+public sealed interface ASTNode permits Program, Parameter, FunctionDeclaration, StructDeclaration, Stmt, Expr {
     SourceRange range();
 }

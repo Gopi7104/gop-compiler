@@ -479,4 +479,84 @@ class SemanticAnalyzerTest {
                     """);
         }
     }
+
+    // Structs (Milestone S1, v3): declarations register into a new, separate
+    // structTable — reusing registerFunctions()'s own duplicate-name pattern
+    // exactly, and reusing Scope.define()'s existing duplicate-detection
+    // mechanism for fields, exactly like function parameters already do.
+    // Structs are not yet usable as types anywhere (no struct-typed fields,
+    // variables, construction, or field access) — that's later milestones.
+    @Nested
+    class Structs {
+
+        private SemanticModel analyzeToModel(String source) {
+            Parser parser = new Parser(new Lexer(source).scanTokens());
+            Program program = parser.parseProgram();
+            assertFalse(parser.reporter().hasErrors(), "expected no parser errors for: " + source);
+            SemanticAnalyzer analyzer = new SemanticAnalyzer(program);
+            SemanticModel model = analyzer.analyze();
+            assertTrue(analyzer.reporter().diagnostics().isEmpty(),
+                    "expected no diagnostics, got: " + analyzer.reporter().diagnostics());
+            return model;
+        }
+
+        @Test
+        void emptyStructIsFine() {
+            assertNoDiagnostics("struct Empty { } none main() { }");
+        }
+
+        @Test
+        void structWithFieldsIsFine() {
+            assertNoDiagnostics("struct Point { num x; num y; } none main() { }");
+        }
+
+        @Test
+        void duplicateStructNameIsRejected() {
+            Diagnostic d = assertSingleDiagnostic(
+                    "struct Point { num x; } struct Point { num y; } none main() { }", ErrorPhase.SEMANTIC);
+            assertTrue(d.message().contains("struct 'Point' is already declared"));
+        }
+
+        @Test
+        void duplicateFieldNameIsRejected() {
+            Diagnostic d = assertSingleDiagnostic(
+                    "struct Point { num x; num x; } none main() { }", ErrorPhase.SEMANTIC);
+            assertTrue(d.message().contains("field 'x' is already declared"));
+        }
+
+        @Test
+        void duplicateFieldNamesAcrossDifferentStructsDoNotConflict() {
+            // Each struct's fields are their own flat namespace — 'x'
+            // declared in TWO DIFFERENT structs is not a collision.
+            assertNoDiagnostics("struct A { num x; } struct B { num x; } none main() { }");
+        }
+
+        @Test
+        void structDeclaredAfterAFunctionStillRegisters() {
+            // "Forward registration": declaration order between structs and
+            // functions doesn't matter — structs register in Pass 1, before
+            // any function body is analyzed, mirroring registerFunctions()'s
+            // own forward-reference support.
+            SemanticModel model = analyzeToModel("none main() { } struct Point { num x; }");
+            assertTrue(model.structTable().containsKey("Point"));
+        }
+
+        @Test
+        void structAndFunctionSharingANameDoNotConflict() {
+            // Structs and functions are separate namespaces, resolved by
+            // grammatical position, not a shared name check — a deliberate
+            // design decision, not an oversight.
+            SemanticModel model = analyzeToModel(
+                    "struct Point { num x; } num Point() { give 5; } none main() { }");
+            assertTrue(model.structTable().containsKey("Point"));
+            assertTrue(model.functionTable().containsKey("Point"));
+        }
+
+        @Test
+        void multipleStructsAllRegisterIndependently() {
+            SemanticModel model = analyzeToModel(
+                    "struct A { num x; } struct B { num y; } struct C { num z; } none main() { }");
+            assertEquals(3, model.structTable().size());
+        }
+    }
 }

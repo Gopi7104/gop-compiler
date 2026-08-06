@@ -4,6 +4,7 @@ import com.gopilang.ast.ArrayAccessExpression;
 import com.gopilang.ast.ArrayLengthExpression;
 import com.gopilang.ast.AssignmentExpression;
 import com.gopilang.ast.BinaryExpression;
+import com.gopilang.ast.BinaryOperator;
 import com.gopilang.ast.BlockStatement;
 import com.gopilang.ast.Expr;
 import com.gopilang.ast.ExpressionStatement;
@@ -125,6 +126,38 @@ public final class CodeGenerator {
                 };
                 instructions.add(new Instruction(opcode, 0));
             }
+            case BinaryExpression binary when binary.operator() == BinaryOperator.AND -> {
+                // left && right, using only JMP_IF_FALSE/JMP (no JMP_IF_TRUE exists):
+                //   compile(left); JMP_IF_FALSE -> FALSE; compile(right); JMP -> END;
+                //   FALSE: PUSH_CONST no; END:
+                // JMP_IF_FALSE unconditionally pops its operand, so the FALSE branch
+                // must push its own `no` — left's value is already gone from the stack
+                // by the time either branch is reached. Both branches leave exactly one
+                // value on the stack, same invariant every other expression upholds.
+                compileExpr(binary.left());
+                int jmpFalseIndex = instructions.size();
+                instructions.add(new Instruction(Opcode.JMP_IF_FALSE, -1));
+                compileExpr(binary.right());
+                int jmpEndIndex = instructions.size();
+                instructions.add(new Instruction(Opcode.JMP, -1));
+                instructions.set(jmpFalseIndex, new Instruction(Opcode.JMP_IF_FALSE, instructions.size()));
+                instructions.add(new Instruction(Opcode.PUSH_CONST, constantIndex(false)));
+                instructions.set(jmpEndIndex, new Instruction(Opcode.JMP, instructions.size()));
+            }
+            case BinaryExpression binary when binary.operator() == BinaryOperator.OR -> {
+                // left || right: compile(left); JMP_IF_FALSE -> EVAL_RIGHT (left true
+                // falls through to short-circuit); PUSH_CONST yes; JMP -> END;
+                // EVAL_RIGHT: compile(right); END: — mirror image of AND above.
+                compileExpr(binary.left());
+                int jmpFalseIndex = instructions.size();
+                instructions.add(new Instruction(Opcode.JMP_IF_FALSE, -1));
+                instructions.add(new Instruction(Opcode.PUSH_CONST, constantIndex(true)));
+                int jmpEndIndex = instructions.size();
+                instructions.add(new Instruction(Opcode.JMP, -1));
+                instructions.set(jmpFalseIndex, new Instruction(Opcode.JMP_IF_FALSE, instructions.size()));
+                compileExpr(binary.right());
+                instructions.set(jmpEndIndex, new Instruction(Opcode.JMP, instructions.size()));
+            }
             case BinaryExpression binary -> {
                 compileExpr(binary.left());
                 compileExpr(binary.right());
@@ -142,10 +175,7 @@ public final class CodeGenerator {
                     case GREATER -> Opcode.CMP_GT;
                     case LESS_EQUAL -> Opcode.CMP_LE;
                     case GREATER_EQUAL -> Opcode.CMP_GE;
-                    // TODO: AND/OR need short-circuit compilation (conditional jumps over
-                    // the right operand), not a single opcode after both sides are compiled.
-                    case AND, OR -> throw new UnsupportedOperationException(
-                            "short-circuit compilation for " + binary.operator() + " not yet implemented");
+                    case AND, OR -> throw new IllegalStateException("unreachable: handled above");
                 };
                 instructions.add(new Instruction(opcode, 0));
             }

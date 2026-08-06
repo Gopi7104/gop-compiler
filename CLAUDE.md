@@ -25,7 +25,7 @@ See [README.md](README.md) for language examples and CLI usage, [ARCHITECTURE.md
   - All modes share `compileToBytecode()`, which runs lexer → parser → semantic analyzer → code generator in sequence and stops at the first phase reporting errors — a later phase never sees output from a failed earlier one.
 - Sample programs live in `examples/*.gopi`; `examples/semantic/` has one small program per semantic-diagnostic category (undefined variables, shadowing, duplicate declarations, use-before-assignment, unreachable code, etc.) — useful as regression material and as executable documentation of what each check catches.
 
-Test suites (`src/test/java/com/gopilang/`) are organized by pipeline stage — currently `lexer/`, `parser/`, `semantic/`. There is no `bytecode`/`vm` test package yet even though those stages are implemented — if you add tests for them, follow the existing per-stage organization rather than inventing a different convention.
+Test suites (`src/test/java/com/gopilang/`) are organized by pipeline stage — `lexer/`, `parser/`, `semantic/`, and (since the `&&`/`||` short-circuit codegen milestone) `bytecode/`, `vm/`.
 
 ## Architecture
 
@@ -76,8 +76,11 @@ One flat instruction stream spans every function in the program; each active cal
 
 ### Current implementation state
 
-Every pipeline stage — lexer, parser/AST, semantic analysis, bytecode generation, VM — is implemented and exercised through the CLI. v2 Milestone 1 added arrays (parsing, type-checking, codegen, and VM opcodes) end-to-end. Known, tracked gaps (see [README.md](README.md#future-roadmap) and [CONTRIBUTING.md](CONTRIBUTING.md#known-tracked-gaps) — these are deliberate, not oversights, so don't "fix" them without checking there first):
+Every pipeline stage — lexer, parser/AST, semantic analysis, bytecode generation, VM — is implemented and exercised through the CLI. v2 Milestone 1 added arrays (parsing, type-checking, codegen, and VM opcodes) end-to-end. `&&`/`||` short-circuit compilation (previously a tracked gap — `CodeGenerator` threw `UnsupportedOperationException` for them) is now implemented: both compile to conditional jumps reusing the existing `JMP`/`JMP_IF_FALSE` opcodes (no new opcodes, no VM changes), evaluating the right operand only when the left doesn't already determine the result — see `CodeGeneratorTest`/`VirtualMachineTest` (the first test suites for the `bytecode`/`vm` packages) and `examples/short_circuit.gopi`.
 
-- `&&`/`||` parse and type-check correctly but `CodeGenerator` throws `UnsupportedOperationException` for them — short-circuit evaluation needs conditional jumps interleaved with the right operand's code, a different shape than every other binary operator (which unconditionally compiles both sides first).
+**v3 Milestone S1 (struct types, in progress)**: top-level `struct Name { field* }` declarations now parse and register into a new `structTable` (`StructSymbol`, mirroring `FunctionSymbol`'s shape), with duplicate-struct-name and duplicate-field-name detection reusing the exact patterns `registerFunctions()`/`analyzeFunction()` already use. Fields are plain `Parameter`s (no new "Field" node) and are primitive-typed only. **Deliberately not yet implemented, not a gap**: struct names are not legal field/parameter/variable/return types anywhere, there is no construction syntax, and there is no field access or assignment — see [LANGUAGE.md's Structs section](LANGUAGE.md#structs) and the Struct Types design review for the full planned milestone sequence (S2: type-system integration + parser lookahead; S3: cyclic-struct detection; S4: construction; S5: field access/assignment; S6: docs/examples/final audit). No AST node, semantic check, bytecode opcode, or VM behavior beyond struct *declaration* registration exists yet — `TypeRef`/`CodeGenerator`/`VirtualMachine` are all untouched by this milestone.
+
+Remaining known, tracked gaps (see [README.md](README.md#future-roadmap) and [CONTRIBUTING.md](CONTRIBUTING.md#known-tracked-gaps) — these are deliberate, not oversights, so don't "fix" them without checking there first):
+
 - Bytecode serialization (`BytecodeWriter`/`BytecodeReader`, writing a `BytecodeModule` to a `.gbc` file and reading it back) doesn't exist — a compiled module only ever lives in memory within one process run.
 - Self-hosting (rewriting the compiler in GopiLang itself) and a real debugger (breakpoints/single-stepping against `Frame`/the call stack) are long-term, not-yet-started goals.

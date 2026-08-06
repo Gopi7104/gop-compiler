@@ -19,6 +19,7 @@
 /Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/ast/Program.java
 /Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/ast/ReturnStatement.java
 /Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/ast/Stmt.java
+/Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/ast/StructDeclaration.java
 /Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/ast/UnaryExpression.java
 /Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/ast/UnaryOperator.java
 /Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/ast/VariableDeclaration.java
@@ -53,6 +54,7 @@
 /Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/semantic/Scope.java
 /Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/semantic/SemanticAnalyzer.java
 /Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/semantic/SemanticModel.java
+/Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/semantic/StructSymbol.java
 /Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/semantic/TypeRules.java
 /Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/semantic/VariableSymbol.java
 /Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/semantic/package-info.java

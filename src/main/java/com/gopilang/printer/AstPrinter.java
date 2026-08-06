@@ -19,6 +19,7 @@ import com.gopilang.ast.PrintStatement;
 import com.gopilang.ast.Program;
 import com.gopilang.ast.ReturnStatement;
 import com.gopilang.ast.Stmt;
+import com.gopilang.ast.StructDeclaration;
 import com.gopilang.ast.UnaryExpression;
 import com.gopilang.ast.VariableDeclaration;
 import com.gopilang.ast.VariableExpression;
@@ -69,10 +70,21 @@ public final class AstPrinter {
 
     private static TreeNode describe(Program program) {
         List<TreeNode> children = new ArrayList<>();
+        for (StructDeclaration structDecl : program.structs()) {
+            children.add(describe(structDecl));
+        }
         for (FunctionDeclaration function : program.functions()) {
             children.add(describe(function));
         }
         return new TreeNode("Program", children);
+    }
+
+    private static TreeNode describe(StructDeclaration structDecl) {
+        List<TreeNode> children = new ArrayList<>();
+        for (Parameter field : structDecl.fields()) {
+            children.add(describe(field));
+        }
+        return new TreeNode("StructDeclaration " + structDecl.name(), children);
     }
 
     private static TreeNode describe(FunctionDeclaration function) {

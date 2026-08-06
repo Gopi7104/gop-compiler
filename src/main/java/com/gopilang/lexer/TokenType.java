@@ -27,6 +27,7 @@ public enum TokenType {
     KW_RETURN,
     KW_PRINT,
     KW_NEW,
+    KW_STRUCT,
 
     // Operators: arithmetic
     PLUS,

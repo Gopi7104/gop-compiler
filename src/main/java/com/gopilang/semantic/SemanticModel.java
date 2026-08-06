@@ -11,12 +11,13 @@ import java.util.IdentityHashMap;
 import java.util.Map;
 
 /**
- * The complete, immutable output of {@code SemanticAnalyzer}: the function
- * table plus every identifier/call resolution and expression type computed
- * during analysis. Never written onto the AST nodes themselves — kept as a
- * separate model so the AST stays a pure, immutable syntax tree.
+ * The complete, immutable output of {@code SemanticAnalyzer}: the struct and
+ * function tables plus every identifier/call resolution and expression type
+ * computed during analysis. Never written onto the AST nodes themselves —
+ * kept as a separate model so the AST stays a pure, immutable syntax tree.
  */
 public record SemanticModel(
+        Map<String, StructSymbol> structTable,
         Map<String, FunctionSymbol> functionTable,
         Map<VariableExpression, VariableSymbol> variableResolutions,
         Map<AssignmentExpression, VariableSymbol> assignmentTargetResolutions,
@@ -24,18 +25,20 @@ public record SemanticModel(
         Map<Expr, TypeRef> expressionTypes
 ) {
     /**
-     * Defensively copies all five maps. {@code functionTable} is name-keyed
-     * (ordinary equality is correct) so {@code Map.copyOf} is the right tool
-     * there. The other four are node-keyed and MUST stay identity-based:
-     * {@code Map.copyOf} builds its result using {@code equals()}/{@code
-     * hashCode()}, so copying an {@code IdentityHashMap} through it doesn't
-     * just silently lose identity semantics — it throws {@code
-     * IllegalArgumentException("duplicate key")} the moment two
-     * structurally-equal-but-distinct AST nodes exist. Rebuilding a genuine
-     * {@code IdentityHashMap} (a true copy, immune to later mutation of the
-     * source) and wrapping it unmodifiable is the correct fix.
+     * Defensively copies all six maps. {@code structTable}/{@code
+     * functionTable} are name-keyed (ordinary equality is correct) so {@code
+     * Map.copyOf} is the right tool there. The other four are node-keyed and
+     * MUST stay identity-based: {@code Map.copyOf} builds its result using
+     * {@code equals()}/{@code hashCode()}, so copying an {@code
+     * IdentityHashMap} through it doesn't just silently lose identity
+     * semantics — it throws {@code IllegalArgumentException("duplicate
+     * key")} the moment two structurally-equal-but-distinct AST nodes exist.
+     * Rebuilding a genuine {@code IdentityHashMap} (a true copy, immune to
+     * later mutation of the source) and wrapping it unmodifiable is the
+     * correct fix.
      */
     public SemanticModel {
+        structTable = Map.copyOf(structTable);
         functionTable = Map.copyOf(functionTable);
         variableResolutions = Collections.unmodifiableMap(new IdentityHashMap<>(variableResolutions));
         assignmentTargetResolutions =

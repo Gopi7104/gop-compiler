@@ -1,9 +1,0 @@
-// function_calls.gopi - a user-defined function, called from main
-
-num add(num a, num b) {
-    give a + b;
-}
-
-none main() {
-    show(add(1, 2));
-}

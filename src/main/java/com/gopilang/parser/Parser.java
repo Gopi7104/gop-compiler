@@ -20,6 +20,7 @@ import com.gopilang.ast.PrintStatement;
 import com.gopilang.ast.Program;
 import com.gopilang.ast.ReturnStatement;
 import com.gopilang.ast.Stmt;
+import com.gopilang.ast.StructDeclaration;
 import com.gopilang.ast.UnaryExpression;
 import com.gopilang.ast.UnaryOperator;
 import com.gopilang.ast.VariableDeclaration;
@@ -59,23 +60,28 @@ public final class Parser {
         return reporter;
     }
 
-    /** Parses the whole token stream into a {@link Program} (a list of function declarations). */
+    /** Parses the whole token stream into a {@link Program} (top-level function and struct declarations). */
     public Program parseProgram() {
         SourceLocation start = peek().location();
         List<FunctionDeclaration> functions = new ArrayList<>();
+        List<StructDeclaration> structs = new ArrayList<>();
         while (!isAtEnd()) {
             try {
-                functions.add(parseFunction());
+                if (check(TokenType.KW_STRUCT)) {
+                    structs.add(parseStructDeclaration());
+                } else {
+                    functions.add(parseFunction());
+                }
             } catch (ParseError e) {
                 reporter.report(Diagnostic.from(e));
                 synchronize(false);
             }
         }
-        // previous() is unsafe when functions is empty (current is still 0, so
+        // previous() is unsafe when nothing was parsed (current is still 0, so
         // there is no "previous" token) — an empty program's range collapses
         // to a point at its own start (EOF's location) instead.
-        SourceLocation end = functions.isEmpty() ? start : previous().location();
-        return new Program(functions, new SourceRange(start, end));
+        SourceLocation end = (functions.isEmpty() && structs.isEmpty()) ? start : previous().location();
+        return new Program(functions, structs, new SourceRange(start, end));
     }
 
     private FunctionDeclaration parseFunction() {
@@ -101,6 +107,38 @@ public final class Parser {
             } while (match(TokenType.COMMA));
         }
         return parameters;
+    }
+
+    // structDecl ::= "struct" IDENTIFIER "{" field* "}" — mirrors parseBlock()'s
+    // own brace-delimited, per-item recovery exactly (a stray '}' ending the
+    // struct body must not be swallowed, same reasoning as a block's closing brace).
+    private StructDeclaration parseStructDeclaration() {
+        SourceLocation start = peek().location();
+        consume(TokenType.KW_STRUCT, "expected 'struct'");
+        Token name = consume(TokenType.IDENTIFIER, "expected a struct name");
+        consume(TokenType.LEFT_BRACE, "expected '{' to start a struct body");
+        List<Parameter> fields = new ArrayList<>();
+        while (!check(TokenType.RIGHT_BRACE) && !isAtEnd()) {
+            try {
+                fields.add(parseField());
+            } catch (ParseError e) {
+                reporter.report(Diagnostic.from(e));
+                synchronize(true);
+            }
+        }
+        Token closing = consume(TokenType.RIGHT_BRACE, "expected '}' to end a struct body");
+        return new StructDeclaration(name.lexeme(), fields, new SourceRange(start, closing.location()));
+    }
+
+    // field ::= type IDENTIFIER ";" — the exact same shape as a function
+    // parameter, so it's represented as a Parameter (see parseParameters());
+    // no separate "Field" AST node exists.
+    private Parameter parseField() {
+        SourceLocation start = peek().location();
+        TypeRef type = parseType();
+        Token name = consume(TokenType.IDENTIFIER, "expected a field name");
+        Token semicolon = consume(TokenType.SEMICOLON, "expected ';' after field declaration");
+        return new Parameter(type, name.lexeme(), new SourceRange(start, semicolon.location()));
     }
 
     // type ::= elementType ( "[" "]" )? — the bracket pair marks "array of
@@ -544,7 +582,8 @@ public final class Parser {
 
     private boolean isStatementStartKeyword() {
         return switch (peek().type()) {
-            case KW_IF, KW_WHILE, KW_FOR, KW_RETURN, KW_PRINT, KW_INT, KW_FLOAT, KW_BOOL, KW_STRING, KW_VOID -> true;
+            case KW_IF, KW_WHILE, KW_FOR, KW_RETURN, KW_PRINT, KW_STRUCT,
+                 KW_INT, KW_FLOAT, KW_BOOL, KW_STRING, KW_VOID -> true;
             default -> false;
         };
     }

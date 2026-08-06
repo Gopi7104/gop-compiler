@@ -19,6 +19,7 @@ import com.gopilang.ast.PrintStatement;
 import com.gopilang.ast.Program;
 import com.gopilang.ast.ReturnStatement;
 import com.gopilang.ast.Stmt;
+import com.gopilang.ast.StructDeclaration;
 import com.gopilang.ast.UnaryExpression;
 import com.gopilang.ast.VariableDeclaration;
 import com.gopilang.ast.VariableExpression;
@@ -61,6 +62,7 @@ public final class SemanticAnalyzer {
     // frozen (and, for the node-keyed maps, copied into genuine
     // IdentityHashMaps) by SemanticModel's own compact constructor at the end
     // of analyze().
+    private final Map<String, StructSymbol> structTable = new HashMap<>();
     private final Map<String, FunctionSymbol> functionTable = new HashMap<>();
     private final Map<VariableExpression, VariableSymbol> variableResolutions = new IdentityHashMap<>();
     private final Map<AssignmentExpression, VariableSymbol> assignmentTargetResolutions = new IdentityHashMap<>();
@@ -93,13 +95,14 @@ public final class SemanticAnalyzer {
 
     /** Runs both passes over the program and returns the resulting {@link SemanticModel}. */
     public SemanticModel analyze() {
+        registerStructs();
         registerFunctions();
         for (FunctionDeclaration function : program.functions()) {
             analyzeFunction(function);
         }
         validateMainFunction();
-        return new SemanticModel(
-                functionTable, variableResolutions, assignmentTargetResolutions, callResolutions, expressionTypes);
+        return new SemanticModel(structTable, functionTable, variableResolutions, assignmentTargetResolutions,
+                callResolutions, expressionTypes);
     }
 
     // Whole-program check, run once after every function has been analyzed —
@@ -125,6 +128,43 @@ public final class SemanticAnalyzer {
                     "'main' must have the signature 'none main()'",
                     "found return type '" + main.returnType().displayName() + "' with "
                             + main.parameterTypes().size() + " parameter(s)"));
+        }
+    }
+
+    // Pass 1, structs: register every struct's field list before functions are
+    // registered, so a function signature could in principle already refer to
+    // a struct declared later in the file (forward reference) — not yet
+    // exercised, since struct names aren't legal field/parameter/variable
+    // types until a later milestone, but the ordering is established now
+    // rather than needing to be revisited when it starts to matter. Duplicate
+    // struct names, and duplicate field names within one struct, are
+    // reported, not thrown — mirroring registerFunctions()'s and
+    // analyzeFunction()'s own parameter-duplicate handling exactly: the first
+    // declaration stays authoritative.
+    private void registerStructs() {
+        for (StructDeclaration structDecl : program.structs()) {
+            // A throwaway Scope, used only for its existing putIfAbsent-based
+            // duplicate-name detection — a struct's fields are a flat
+            // namespace, exactly like a function's parameters are.
+            Scope fieldScope = new Scope(null);
+            for (Parameter field : structDecl.fields()) {
+                VariableSymbol fieldSymbol = new VariableSymbol(field.name(), field.type(), field.range());
+                fieldScope.define(fieldSymbol).ifPresent(existing -> reporter.report(new Diagnostic(
+                        ErrorPhase.SEMANTIC,
+                        field.range(),
+                        "field '" + field.name() + "' is already declared",
+                        "previous declaration was at " + existing.declaredAt())));
+            }
+
+            StructSymbol symbol = new StructSymbol(structDecl.name(), structDecl.fields(), structDecl.range());
+            StructSymbol existing = structTable.putIfAbsent(symbol.name(), symbol);
+            if (existing != null) {
+                reporter.report(new Diagnostic(
+                        ErrorPhase.SEMANTIC,
+                        symbol.declaredAt(),
+                        "struct '" + symbol.name() + "' is already declared",
+                        "previous declaration was at " + existing.declaredAt()));
+            }
         }
     }
 

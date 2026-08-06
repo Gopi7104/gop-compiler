@@ -1,9 +1,0 @@
-// read_before_assignment.gopi
-// Expected: 1 diagnostic (SEMANTIC) — "variable 'x' might not have been
-// assigned a value". x is declared with no initializer and read before any
-// assignment reaches it.
-
-none main() {
-    num x;
-    show(x);
-}
