@@ -156,7 +156,7 @@ class SemanticAnalyzerTest {
         @Test
         void returningValueFromVoidFunctionIsRejected() {
             Diagnostic d = assertSingleDiagnostic("none f() { give 5; } none main() { f(); }", ErrorPhase.TYPE);
-            assertTrue(d.message().contains("cannot return a value from a function declared 'VOID'"));
+            assertTrue(d.message().contains("cannot return a value from a function declared 'none'"));
         }
 
         @Test
@@ -214,13 +214,13 @@ class SemanticAnalyzerTest {
         @Test
         void nonBoolIfConditionIsRejected() {
             Diagnostic d = assertSingleDiagnostic("none main() { if (5) { } }", ErrorPhase.TYPE);
-            assertTrue(d.message().contains("if condition must be 'BOOL'"));
+            assertTrue(d.message().contains("if condition must be 'flag'"));
         }
 
         @Test
         void nonBoolWhileConditionIsRejected() {
             Diagnostic d = assertSingleDiagnostic("none main() { loop (5) { } }", ErrorPhase.TYPE);
-            assertTrue(d.message().contains("while condition must be 'BOOL'"));
+            assertTrue(d.message().contains("while condition must be 'flag'"));
         }
 
         @Test
@@ -419,7 +419,7 @@ class SemanticAnalyzerTest {
         void nonNumIndexIsRejected() {
             Diagnostic d = assertSingleDiagnostic(
                     "none main() { num[] a = new num[3]; show(a[\"oops\"]); }", ErrorPhase.TYPE);
-            assertTrue(d.message().contains("array index must be 'INT'"));
+            assertTrue(d.message().contains("array index must be 'num'"));
         }
 
         @Test
@@ -433,14 +433,14 @@ class SemanticAnalyzerTest {
         void assigningWrongElementTypeIsRejected() {
             Diagnostic d = assertSingleDiagnostic(
                     "none main() { num[] a = new num[3]; a[0] = \"hello\"; }", ErrorPhase.TYPE);
-            assertTrue(d.message().contains("cannot assign 'STRING' to array element of type 'INT'"));
+            assertTrue(d.message().contains("cannot assign 'text' to array element of type 'num'"));
         }
 
         @Test
         void arrayAssignmentRequiresExactElementTypeNoWidening() {
             Diagnostic d = assertSingleDiagnostic(
                     "none main() { dec[] a = new num[3]; }", ErrorPhase.TYPE);
-            assertTrue(d.message().contains("cannot assign 'INT[]' to variable of type 'FLOAT[]'"));
+            assertTrue(d.message().contains("cannot assign 'num[]' to variable of type 'dec[]'"));
         }
 
         @Test
@@ -453,14 +453,14 @@ class SemanticAnalyzerTest {
         void arithmeticOnArraysIsRejected() {
             Diagnostic d = assertSingleDiagnostic(
                     "none main() { num[] a = new num[3]; num[] b = new num[3]; show(a + b); }", ErrorPhase.TYPE);
-            assertTrue(d.message().contains("cannot be applied to 'INT[]' and 'INT[]'"));
+            assertTrue(d.message().contains("cannot be applied to 'num[]' and 'num[]'"));
         }
 
         @Test
         void printingAnArrayDirectlyIsRejected() {
             Diagnostic d = assertSingleDiagnostic(
                     "none main() { num[] a = new num[3]; show(a); }", ErrorPhase.TYPE);
-            assertTrue(d.message().contains("cannot print a value of type 'INT[]'"));
+            assertTrue(d.message().contains("cannot print a value of type 'num[]'"));
         }
 
         @Test

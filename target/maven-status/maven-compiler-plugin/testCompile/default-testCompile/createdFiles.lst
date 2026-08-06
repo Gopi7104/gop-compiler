@@ -17,6 +17,7 @@ com/gopilang/semantic/SemanticAnalyzerTest$DuplicateFunctions.class
 com/gopilang/semantic/SemanticAnalyzerTest$BoolConditions.class
 com/gopilang/semantic/SemanticAnalyzerTest$Reachability.class
 com/gopilang/parser/ParserTest$DanglingElse.class
+com/gopilang/parser/ParserTest$ForLoop.class
 com/gopilang/parser/ParserTest$InvalidSyntax.class
 com/gopilang/parser/ParserTest$ExpressionParsing.class
 com/gopilang/lexer/LexerTest.class

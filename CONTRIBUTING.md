@@ -12,6 +12,8 @@ mvn compile
 
 The CLI wrapper script (`./gopic`) runs against `target/classes`, so re-run `mvn compile` after any source change before using `./gopic`.
 
+To try `gopic` as an installed command (from any directory, and unaffected by `mvn clean`), run `./install.sh` — see [README.md](README.md#installing-gopic) for details. `./uninstall.sh` removes it again. `target/` is gitignored; never commit build output.
+
 ## Run Tests
 
 ```bash

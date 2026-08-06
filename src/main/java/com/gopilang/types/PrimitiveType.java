@@ -6,5 +6,18 @@ public enum PrimitiveType {
     FLOAT,
     BOOL,
     STRING,
-    VOID
+    VOID;
+
+    // The GopiLang keyword spelling, for user-facing diagnostics only —
+    // toString() (used by AstPrinter/BytecodeDisassembler's internal-view
+    // dumps) deliberately keeps returning the enum's own name.
+    public String displayName() {
+        return switch (this) {
+            case INT -> "num";
+            case FLOAT -> "dec";
+            case BOOL -> "flag";
+            case STRING -> "text";
+            case VOID -> "none";
+        };
+    }
 }

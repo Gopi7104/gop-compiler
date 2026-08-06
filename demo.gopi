@@ -1,7 +1,9 @@
 none main() {
 
-    num[] a = new num[5];
+    num[] arr = new num[5];
 
-    a[0] = "Hello";
+    dec x = 2.5;
+
+    show(arr[x]);
 
 }

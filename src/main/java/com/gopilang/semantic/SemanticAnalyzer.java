@@ -123,7 +123,7 @@ public final class SemanticAnalyzer {
                     ErrorPhase.SEMANTIC,
                     main.declaredAt(),
                     "'main' must have the signature 'none main()'",
-                    "found return type '" + main.returnType() + "' with "
+                    "found return type '" + main.returnType().displayName() + "' with "
                             + main.parameterTypes().size() + " parameter(s)"));
         }
     }
@@ -187,7 +187,7 @@ public final class SemanticAnalyzer {
                     ErrorPhase.TYPE,
                     function.range(),
                     "function '" + function.name() + "' does not return a value on all paths",
-                    "declared to return '" + function.returnType() + "'"));
+                    "declared to return '" + function.returnType().displayName() + "'"));
         }
 
         currentScope = null;
@@ -250,7 +250,8 @@ public final class SemanticAnalyzer {
                         reporter.report(new Diagnostic(
                                 ErrorPhase.TYPE,
                                 init.range(),
-                                "cannot assign '" + type + "' to variable of type '" + decl.type() + "'",
+                                "cannot assign '" + type.displayName() + "' to variable of type '"
+                                        + decl.type().displayName() + "'",
                                 null));
                     }
                 }));
@@ -287,7 +288,7 @@ public final class SemanticAnalyzer {
                         reporter.report(new Diagnostic(
                                 ErrorPhase.TYPE,
                                 ifStmt.condition().range(),
-                                "if condition must be 'BOOL', found '" + type + "'",
+                                "if condition must be 'flag', found '" + type.displayName() + "'",
                                 null));
                     }
                 });
@@ -321,7 +322,7 @@ public final class SemanticAnalyzer {
                         reporter.report(new Diagnostic(
                                 ErrorPhase.TYPE,
                                 whileStmt.condition().range(),
-                                "while condition must be 'BOOL', found '" + type + "'",
+                                "while condition must be 'flag', found '" + type.displayName() + "'",
                                 null));
                     }
                 });
@@ -343,7 +344,8 @@ public final class SemanticAnalyzer {
                         reporter.report(new Diagnostic(
                                 ErrorPhase.TYPE,
                                 returnStmt.range(),
-                                "missing return value in function declared to return '" + declaredReturnType + "'",
+                                "missing return value in function declared to return '"
+                                        + declaredReturnType.displayName() + "'",
                                 null));
                     }
                 } else {
@@ -353,7 +355,7 @@ public final class SemanticAnalyzer {
                         reporter.report(new Diagnostic(
                                 ErrorPhase.TYPE,
                                 value.range(),
-                                "cannot return a value from a function declared 'VOID'",
+                                "cannot return a value from a function declared 'none'",
                                 null));
                     } else {
                         valueType.ifPresent(type -> {
@@ -361,8 +363,9 @@ public final class SemanticAnalyzer {
                                 reporter.report(new Diagnostic(
                                         ErrorPhase.TYPE,
                                         value.range(),
-                                        "cannot return '" + type + "' from a function declared to return '"
-                                                + declaredReturnType + "'",
+                                        "cannot return '" + type.displayName()
+                                                + "' from a function declared to return '"
+                                                + declaredReturnType.displayName() + "'",
                                         null));
                             }
                         });
@@ -374,7 +377,7 @@ public final class SemanticAnalyzer {
                     reporter.report(new Diagnostic(
                             ErrorPhase.TYPE,
                             printStmt.value().range(),
-                            "cannot print a value of type '" + type + "'",
+                            "cannot print a value of type '" + type.displayName() + "'",
                             null));
                 }
             });
@@ -510,7 +513,8 @@ public final class SemanticAnalyzer {
                     reporter.report(new Diagnostic(
                             ErrorPhase.TYPE,
                             unary.range(),
-                            "operator '" + unary.operator() + "' cannot be applied to '" + operandType.get() + "'",
+                            "operator '" + unary.operator().symbol() + "' cannot be applied to '"
+                                    + operandType.get().displayName() + "'",
                             null));
                     yield Optional.empty();
                 }
@@ -520,7 +524,8 @@ public final class SemanticAnalyzer {
                     reporter.report(new Diagnostic(
                             ErrorPhase.TYPE,
                             unary.range(),
-                            "operator '" + unary.operator() + "' cannot be applied to '" + operandType.get() + "'",
+                            "operator '" + unary.operator().symbol() + "' cannot be applied to '"
+                                    + operandType.get().displayName() + "'",
                             null));
                     yield Optional.empty();
                 }
@@ -537,8 +542,8 @@ public final class SemanticAnalyzer {
                     reporter.report(new Diagnostic(
                             ErrorPhase.TYPE,
                             binary.range(),
-                            "operator '" + binary.operator() + "' cannot be applied to '" + leftType.get()
-                                    + "' and '" + rightType.get() + "'",
+                            "operator '" + binary.operator().symbol() + "' cannot be applied to '"
+                                    + leftType.get().displayName() + "' and '" + rightType.get().displayName() + "'",
                             null));
                     yield Optional.empty();
                 }
@@ -548,8 +553,8 @@ public final class SemanticAnalyzer {
                     reporter.report(new Diagnostic(
                             ErrorPhase.TYPE,
                             binary.range(),
-                            "operator '" + binary.operator() + "' cannot be applied to '" + leftType.get()
-                                    + "' and '" + rightType.get() + "'",
+                            "operator '" + binary.operator().symbol() + "' cannot be applied to '"
+                                    + leftType.get().displayName() + "' and '" + rightType.get().displayName() + "'",
                             null));
                     yield Optional.empty();
                 }
@@ -566,7 +571,8 @@ public final class SemanticAnalyzer {
                     reporter.report(new Diagnostic(
                             ErrorPhase.TYPE,
                             assignment.range(),
-                            "cannot assign '" + valueType.get() + "' to variable of type '" + target.type() + "'",
+                            "cannot assign '" + valueType.get().displayName() + "' to variable of type '"
+                                    + target.type().displayName() + "'",
                             null));
                     yield Optional.empty();
                 }
@@ -606,7 +612,8 @@ public final class SemanticAnalyzer {
                                 ErrorPhase.TYPE,
                                 call.range(),
                                 "argument " + (i + 1) + " of '" + call.calleeName() + "': expected '"
-                                        + parameterType + "', found '" + argumentType.get() + "'",
+                                        + parameterType.displayName() + "', found '"
+                                        + argumentType.get().displayName() + "'",
                                 null));
                     }
                 }
@@ -623,7 +630,7 @@ public final class SemanticAnalyzer {
                     reporter.report(new Diagnostic(
                             ErrorPhase.TYPE,
                             newArray.size().range(),
-                            "array size must be 'INT', found '" + sizeType.get() + "'",
+                            "array size must be 'num', found '" + sizeType.get().displayName() + "'",
                             null));
                 }
                 if (newArray.elementType() == PrimitiveType.VOID) {
@@ -644,7 +651,7 @@ public final class SemanticAnalyzer {
                     reporter.report(new Diagnostic(
                             ErrorPhase.TYPE,
                             access.array().range(),
-                            "cannot index into non-array type '" + arrayType.get() + "'",
+                            "cannot index into non-array type '" + arrayType.get().displayName() + "'",
                             null));
                     yield Optional.empty();
                 }
@@ -652,7 +659,7 @@ public final class SemanticAnalyzer {
                     reporter.report(new Diagnostic(
                             ErrorPhase.TYPE,
                             access.index().range(),
-                            "array index must be 'INT', found '" + indexType.get() + "'",
+                            "array index must be 'num', found '" + indexType.get().displayName() + "'",
                             null));
                 }
                 if (arrayType.isEmpty()) {
@@ -670,7 +677,7 @@ public final class SemanticAnalyzer {
                     reporter.report(new Diagnostic(
                             ErrorPhase.TYPE,
                             length.array().range(),
-                            "'.len()' can only be called on an array, found '" + arrayType.get() + "'",
+                            "'.len()' can only be called on an array, found '" + arrayType.get().displayName() + "'",
                             null));
                     yield Optional.empty();
                 }
@@ -686,7 +693,7 @@ public final class SemanticAnalyzer {
                     reporter.report(new Diagnostic(
                             ErrorPhase.TYPE,
                             indexAssignment.array().range(),
-                            "cannot index into non-array type '" + arrayType.get() + "'",
+                            "cannot index into non-array type '" + arrayType.get().displayName() + "'",
                             null));
                     yield Optional.empty();
                 }
@@ -694,7 +701,7 @@ public final class SemanticAnalyzer {
                     reporter.report(new Diagnostic(
                             ErrorPhase.TYPE,
                             indexAssignment.index().range(),
-                            "array index must be 'INT', found '" + indexType.get() + "'",
+                            "array index must be 'num', found '" + indexType.get().displayName() + "'",
                             null));
                 }
                 if (arrayType.isEmpty() || valueType.isEmpty()) {
@@ -706,7 +713,8 @@ public final class SemanticAnalyzer {
                     reporter.report(new Diagnostic(
                             ErrorPhase.TYPE,
                             indexAssignment.range(),
-                            "cannot assign '" + valueType.get() + "' to array element of type '" + elementType + "'",
+                            "cannot assign '" + valueType.get().displayName() + "' to array element of type '"
+                                    + elementType.displayName() + "'",
                             null));
                     yield Optional.empty();
                 }

@@ -385,6 +385,107 @@ class ParserTest {
         }
     }
 
+    // run (Milestone 2, v2): a for-loop is pure syntactic sugar over the
+    // existing BlockStatement/WhileStatement/ExpressionStatement nodes — no
+    // ForStatement node exists anywhere in the AST. These tests are the
+    // executable proof of that desugaring shape, not just of "it parses".
+    @Nested
+    class ForLoop {
+
+        @Test
+        void desugarsToOuterBlockWithDeclarationAndWhile() {
+            assertEquals("""
+                    Program
+                    └── FunctionDeclaration main() -> VOID
+                        └── BlockStatement
+                            └── BlockStatement
+                                ├── VariableDeclaration INT i
+                                │   └── LiteralExpression 0 (INT)
+                                └── WhileStatement
+                                    ├── condition
+                                    │   └── BinaryExpression [LESS]
+                                    │       ├── VariableExpression i
+                                    │       └── LiteralExpression 5 (INT)
+                                    └── body
+                                        └── BlockStatement
+                                            ├── BlockStatement
+                                            │   └── PrintStatement
+                                            │       └── VariableExpression i
+                                            └── ExpressionStatement
+                                                └── AssignmentExpression i =
+                                                    └── BinaryExpression [ADD]
+                                                        ├── VariableExpression i
+                                                        └── LiteralExpression 1 (INT)
+                    """, parseAndPrint("""
+                    none main() {
+                        run (num i = 0; i < 5; i = i + 1) {
+                            show(i);
+                        }
+                    }
+                    """));
+        }
+
+        @Test
+        void initClauseCanReuseAnExistingVariableInsteadOfDeclaringOne() {
+            assertEquals("""
+                    Program
+                    └── FunctionDeclaration main() -> VOID
+                        └── BlockStatement
+                            ├── VariableDeclaration INT i
+                            └── BlockStatement
+                                ├── ExpressionStatement
+                                │   └── AssignmentExpression i =
+                                │       └── LiteralExpression 0 (INT)
+                                └── WhileStatement
+                                    ├── condition
+                                    │   └── BinaryExpression [LESS]
+                                    │       ├── VariableExpression i
+                                    │       └── LiteralExpression 5 (INT)
+                                    └── body
+                                        └── BlockStatement
+                                            ├── BlockStatement
+                                            │   └── PrintStatement
+                                            │       └── VariableExpression i
+                                            └── ExpressionStatement
+                                                └── AssignmentExpression i =
+                                                    └── BinaryExpression [ADD]
+                                                        ├── VariableExpression i
+                                                        └── LiteralExpression 1 (INT)
+                    """, parseAndPrint("""
+                    none main() {
+                        num i;
+                        run (i = 0; i < 5; i = i + 1) {
+                            show(i);
+                        }
+                    }
+                    """));
+        }
+
+        @Test
+        void missingSemicolonBetweenClausesIsAParseError() {
+            Parser parser = new Parser(new Lexer(
+                    "none main() { run (num i = 0 i < 5; i = i + 1) { show(i); } }").scanTokens());
+            parser.parseProgram();
+            assertTrue(parser.reporter().hasErrors());
+        }
+
+        @Test
+        void missingIncrementClauseIsAParseError() {
+            Parser parser = new Parser(new Lexer(
+                    "none main() { run (num i = 0; i < 5;) { show(i); } }").scanTokens());
+            parser.parseProgram();
+            assertTrue(parser.reporter().hasErrors());
+        }
+
+        @Test
+        void missingParenthesesIsAParseError() {
+            Parser parser = new Parser(new Lexer(
+                    "none main() { run num i = 0; i < 5; i = i + 1) { show(i); } }").scanTokens());
+            parser.parseProgram();
+            assertTrue(parser.reporter().hasErrors());
+        }
+    }
+
     // Nested blocks matter because they exercise parseBlock() and
     // parseStatement() calling each other recursively — the mutual-recursion
     // structure that made these two methods impossible to compile/test in

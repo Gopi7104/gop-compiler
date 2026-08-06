@@ -30,7 +30,7 @@ $ ./gopic examples/factorial.gopi
 - **A stack-based virtual machine** with call frames, a shared instruction stream, and full function-call/recursion support.
 - **Rich diagnostics** with source-line rendering and caret underlines for lexical, syntax, and semantic errors.
 - **A disassembler** for inspecting exactly what the compiler generated, without needing to run it.
-- **Language features**: static types (`num`, `dec`, `flag`, `text`, `none`), arrays of any non-`none` type, variables, arithmetic and comparison operators, `if`/`else`, `loop`, user-defined functions, recursion, and `show`.
+- **Language features**: static types (`num`, `dec`, `flag`, `text`, `none`), arrays of any non-`none` type, variables, arithmetic and comparison operators, `if`/`else`, `loop`, `run` (a C-style for-loop, desugared to `loop` at parse time), user-defined functions, recursion, and `show`.
 
 Known gap (tracked, not hidden): `&&`/`||` parse and type-check correctly but are not yet compiled to bytecode — see [Future Roadmap](#future-roadmap).
 
@@ -69,6 +69,9 @@ The VM is a stack machine: one shared, flat instruction stream spans every funct
 ```
 gop-compiler/
 ├── gopic                      # dev-loop wrapper: java -cp target/classes com.gopilang.cli.GopiC "$@"
+├── install.sh                 # builds + installs gopic to ~/gopilang, symlinked onto PATH
+├── uninstall.sh               # removes the ~/gopilang installation and its PATH symlink
+├── .gitignore                 # ignores target/ and IDE/OS noise — never commit build output
 ├── pom.xml                    # Maven build (Java 21, JUnit 5) — also builds the standalone distribution
 ├── examples/                  # sample .gopi programs
 │   └── semantic/              # programs demonstrating specific semantic diagnostics
@@ -107,7 +110,7 @@ cd gop-compiler
 There are two ways to use GopiLang from here, depending on what you're doing:
 
 - **Working on the compiler itself** — use `mvn compile` and the repo's own `./gopic` script (see [Building](#building) / [Running Programs](#running-programs)). Fastest inner loop; always reflects your latest source changes.
-- **Using `gopic` as an installed command, from any directory** — use `mvn package`, which produces a self-contained, relocatable install at `target/gopilang/` (see [Installing `gopic` System-Wide (macOS)](#installing-gopic-system-wide-macos)).
+- **Using `gopic` as an installed command, from any directory** — run `./install.sh` (see [Installing `gopic`](#installing-gopic)). This does **not** point at `target/`, so it survives `mvn clean`.
 
 ## Building
 
@@ -150,43 +153,26 @@ gopic /path/to/examples/hello.gopi
 Hello, GopiLang!
 ```
 
-## Installing `gopic` System-Wide (macOS)
+## Installing `gopic`
 
-This makes `gopic` behave like `javac` or `python` — runnable from anywhere, with no need to `cd` into this repo first.
-
-**1. Build the distribution:**
+This makes `gopic` behave like `javac` or `python` — runnable from anywhere, with no need to `cd` into this repo first, and (unlike pointing at `target/` directly) unaffected by `mvn clean`.
 
 ```bash
-mvn clean package
+./install.sh
 ```
 
-This produces `target/gopilang/` — a self-contained folder (`bin/`, `lib/`, `examples/`, `README.md`) that can be copied or moved anywhere on disk; `bin/gopic` locates its own `lib/gopilang.jar` relative to itself, not via any hardcoded path.
+This builds the project (`mvn package`), copies the resulting distribution to `~/gopilang` (override with `GOPILANG_INSTALL_DIR=/opt/gopilang ./install.sh`), and symlinks `~/.local/bin/gopic` (override with `GOPILANG_LINK_DIR`) to it. It also verifies Java 21+ is on `PATH` before building. Re-running `./install.sh` after pulling new changes safely replaces the previous installation.
 
-**2. Move it wherever you'd like it to live permanently** (`~/gopilang`, `/opt/gopilang`, or leave it under `target/` — any location works):
+```
+$ ./install.sh
+...
+== GopiLang installed successfully ==
 
-```bash
-cp -R target/gopilang ~/gopilang
-cd ~/gopilang
+Try it:
+  gopic /Users/you/gopilang/examples/hello.gopi
 ```
 
-**3. Make the launcher executable** (it already is when built by Maven, but if you copied it by hand or `chmod` bits got lost along the way):
-
-```bash
-chmod +x bin/gopic
-```
-
-**4. Symlink it onto your `PATH`.** Which directory to use depends on your Mac:
-
-- **Apple Silicon with Homebrew** — `/opt/homebrew/bin` is usually already on `PATH` and user-writable, so no `sudo` is needed:
-  ```bash
-  ln -s "$(pwd)/bin/gopic" /opt/homebrew/bin/gopic
-  ```
-- **Intel Mac, or no Homebrew** — `/usr/local/bin` is the traditional location; it may require `sudo` depending on its ownership on your system:
-  ```bash
-  sudo ln -s "$(pwd)/bin/gopic" /usr/local/bin/gopic
-  ```
-
-**5. Verify it from anywhere:**
+Verify it from anywhere:
 
 ```bash
 cd /tmp
@@ -196,7 +182,22 @@ gopic ~/gopilang/examples/hello.gopi
 Hello, GopiLang!
 ```
 
-To uninstall, just remove the symlink (`rm /opt/homebrew/bin/gopic` or `sudo rm /usr/local/bin/gopic`) and delete the `gopilang` folder — nothing else on your system is touched.
+`mvn clean` in the repository only removes `target/` — the installed copy under `~/gopilang` is untouched, so `gopic` keeps working.
+
+To uninstall:
+
+```bash
+./uninstall.sh
+```
+
+```
+$ ./uninstall.sh
+== GopiLang uninstaller ==
+...
+== GopiLang uninstalled successfully ==
+```
+
+This removes `~/gopilang` and its `PATH` symlink — `uninstall.sh` only ever removes the symlink if it still points at `~/gopilang/bin/gopic`, so it won't touch an unrelated `gopic` you may have installed some other way.
 
 ## CLI Usage
 
@@ -368,6 +369,39 @@ none main() {
 $ ./gopic examples/nested_control_flow.gopi
 5
 ```
+
+**Arrays** ([`arrays.gopi`](examples/arrays.gopi))
+```
+none main() {
+    num[] numbers = new num[3];
+    numbers[0] = 10;
+    numbers[1] = 20;
+    numbers[2] = 30;
+    show(numbers.len());
+}
+```
+```
+$ ./gopic examples/arrays.gopi
+3
+```
+
+**`run` (for-loop)** ([`for_loop.gopi`](examples/for_loop.gopi))
+```
+none main() {
+    run (num i = 0; i < 5; i = i + 1) {
+        show(i);
+    }
+}
+```
+```
+$ ./gopic examples/for_loop.gopi
+0
+1
+2
+3
+4
+```
+`run` is pure syntactic sugar, desugared to `loop` at parse time — see [LANGUAGE.md](LANGUAGE.md#run) for the desugaring rule.
 
 See [`examples/semantic/`](examples/semantic) for programs that each demonstrate one specific semantic diagnostic (undefined variables, shadowing, duplicate declarations, use-before-assignment, unreachable-code checking, and more).
 

@@ -1,0 +1,41 @@
+// for_loop.gopi - the "run" for-loop (v2 Milestone 2)
+//
+// run (init; condition; increment) body desugars purely at parse time into:
+//   { init; loop (condition) { body increment; } }
+// There is no separate for-loop bytecode or VM behavior - it is exactly the
+// same JMP/JMP_IF_FALSE shape a hand-written "loop" would produce.
+
+num sum(num[] values) {
+    num total = 0;
+    run (num i = 0; i < values.len(); i = i + 1) {
+        total = total + values[i];
+    }
+    give total;
+}
+
+none main() {
+    // Fresh loop variable: scoped to the loop only, like Java's for-loop.
+    run (num i = 0; i < 5; i = i + 1) {
+        show(i);
+    }
+
+    // The init clause can also reuse an existing variable instead of
+    // declaring a new one.
+    num countdown;
+    run (countdown = 3; countdown > 0; countdown = countdown - 1) {
+        show(countdown);
+    }
+
+    num[] numbers = new num[5];
+    run (num i = 0; i < numbers.len(); i = i + 1) {
+        numbers[i] = i * 10;
+    }
+    show(sum(numbers));
+
+    // Nesting works with no special casing, same as nested "loop"s would.
+    run (num row = 0; row < 2; row = row + 1) {
+        run (num col = 0; col < 2; col = col + 1) {
+            show(row * 10 + col);
+        }
+    }
+}

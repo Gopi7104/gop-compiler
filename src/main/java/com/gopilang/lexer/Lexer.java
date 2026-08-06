@@ -28,6 +28,7 @@ public final class Lexer {
             Map.entry("if", TokenType.KW_IF),
             Map.entry("else", TokenType.KW_ELSE),
             Map.entry("loop", TokenType.KW_WHILE),
+            Map.entry("run", TokenType.KW_FOR),
             Map.entry("give", TokenType.KW_RETURN),
             Map.entry("show", TokenType.KW_PRINT),
             Map.entry("new", TokenType.KW_NEW),

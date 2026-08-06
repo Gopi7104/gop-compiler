@@ -2,7 +2,7 @@
 // Expected: 3 diagnostics:
 //   1. [SEMANTIC] "undefined function 'missing'" — no such function exists.
 //   2. [TYPE] "function 'add' expects 2 argument(s), found 1" — wrong count.
-//   3. [TYPE] "argument 2 of 'add': expected 'INT', found 'BOOL'" — wrong type.
+//   3. [TYPE] "argument 2 of 'add': expected 'num', found 'flag'" — wrong type.
 // The correctly-formed call (add(1, 2)) produces nothing.
 
 num add(num a, num b) {

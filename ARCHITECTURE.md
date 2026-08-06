@@ -1,6 +1,6 @@
 # Architecture
 
-This document explains how GopiLang's compiler and VM are put together: the pipeline, the responsibility of every package, and the major classes within each.
+This document explains how GopiLang's compiler and VM are put together: the pipeline, the responsibility of every package, and the major classes within each. For building, installing, and running `gopic`, see [README.md](README.md#installing-gopic); for the language itself, see [LANGUAGE.md](LANGUAGE.md).
 
 ## The Pipeline
 
@@ -122,7 +122,7 @@ Never re-validates anything `SemanticModel` already resolved — a missing resol
 
 ## `types` and `util` — Shared, Dependency-Free Support
 
-- **`types.PrimitiveType`** — the five primitive types (`INT`, `FLOAT`, `BOOL`, `STRING`, `VOID`), used by the AST, semantic analysis, and error messages alike.
+- **`types.PrimitiveType`** — the five primitive types (`INT`, `FLOAT`, `BOOL`, `STRING`, `VOID`), used by the AST and semantic analysis. `toString()` returns these internal names, used by `--ast`/`--disassemble`'s developer-facing dumps; `displayName()` returns the GopiLang keyword spelling (`num`/`dec`/`flag`/`text`/`none`) instead, used everywhere a `Diagnostic` message shows a type to the user. `BinaryOperator`/`UnaryOperator` follow the same split, with `symbol()` returning the source operator (`+`, `!`, ...) instead of the enum name.
 - **`util.SourceLocation`** — a single (line, column) position.
 - **`util.SourceRange`** — a (start, end) span, used by every AST node and every `Diagnostic` to point at exactly the source text involved.
 

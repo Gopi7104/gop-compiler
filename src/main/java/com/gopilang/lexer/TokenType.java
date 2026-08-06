@@ -23,6 +23,7 @@ public enum TokenType {
     KW_IF,
     KW_ELSE,
     KW_WHILE,
+    KW_FOR,
     KW_RETURN,
     KW_PRINT,
     KW_NEW,

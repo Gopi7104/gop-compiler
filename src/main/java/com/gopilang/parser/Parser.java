@@ -144,6 +144,7 @@ public final class Parser {
     private Stmt parseStatement() {
         if (check(TokenType.KW_IF)) return parseIfStatement();
         if (check(TokenType.KW_WHILE)) return parseWhileStatement();
+        if (check(TokenType.KW_FOR)) return parseForStatement();
         if (check(TokenType.KW_RETURN)) return parseReturnStatement();
         if (check(TokenType.KW_PRINT)) return parsePrintStatement();
         if (check(TokenType.LEFT_BRACE)) return parseBlock();
@@ -211,6 +212,52 @@ public final class Parser {
         Stmt body = parseStatement();
         SourceLocation end = previous().location();
         return new WhileStatement(condition, body, new SourceRange(start, end));
+    }
+
+    // run (init; condition; increment) body — pure syntactic sugar, desugared
+    // immediately into the existing BlockStatement/WhileStatement/
+    // ExpressionStatement nodes:
+    //
+    //   { init; loop (condition) { body increment; } }
+    //
+    // No ForStatement node exists anywhere in the AST: semantic analysis,
+    // code generation, and the VM never learn a for-loop was written — they
+    // only ever see the while-loop shape they already handle. The outer
+    // BlockStatement is what scopes the init variable to just the loop,
+    // exactly as it would for any other block.
+    private Stmt parseForStatement() {
+        SourceLocation start = peek().location();
+        consume(TokenType.KW_FOR, "expected 'run'");
+        consume(TokenType.LEFT_PAREN, "expected '(' after 'run'");
+
+        Stmt init = parseForInit();
+        Expr condition = parseExpression();
+        consume(TokenType.SEMICOLON, "expected ';' after loop condition");
+        Expr increment = parseExpression();
+        consume(TokenType.RIGHT_PAREN, "expected ')' after for-loop clauses");
+
+        Stmt body = parseStatement();
+        SourceLocation end = previous().location();
+        SourceRange range = new SourceRange(start, end);
+
+        Stmt loopBody = new BlockStatement(List.of(body, new ExpressionStatement(increment, range)), range);
+        Stmt whileStatement = new WhileStatement(condition, loopBody, range);
+        return new BlockStatement(List.of(init, whileStatement), range);
+    }
+
+    // forInit ::= variableDecl | expression ";" — mirrors parseStatement()'s
+    // own type-keyword-vs-expression dispatch. variableDecl already consumes
+    // its own trailing ';'; a bare expression (reusing an existing variable,
+    // e.g. "i = 0") needs it consumed here instead.
+    private Stmt parseForInit() {
+        if (check(TokenType.KW_INT) || check(TokenType.KW_FLOAT) || check(TokenType.KW_BOOL)
+                || check(TokenType.KW_STRING) || check(TokenType.KW_VOID)) {
+            return parseVariableDeclaration();
+        }
+        SourceLocation start = peek().location();
+        Expr expression = parseExpression();
+        Token semicolon = consume(TokenType.SEMICOLON, "expected ';' after for-loop initializer");
+        return new ExpressionStatement(expression, new SourceRange(start, semicolon.location()));
     }
 
     private ExpressionStatement parseExpressionStatement() {
@@ -497,7 +544,7 @@ public final class Parser {
 
     private boolean isStatementStartKeyword() {
         return switch (peek().type()) {
-            case KW_IF, KW_WHILE, KW_RETURN, KW_PRINT, KW_INT, KW_FLOAT, KW_BOOL, KW_STRING, KW_VOID -> true;
+            case KW_IF, KW_WHILE, KW_FOR, KW_RETURN, KW_PRINT, KW_INT, KW_FLOAT, KW_BOOL, KW_STRING, KW_VOID -> true;
             default -> false;
         };
     }

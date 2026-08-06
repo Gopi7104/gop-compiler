@@ -2,6 +2,25 @@
 
 GopiLang is a small, statically-typed, C-family language. This document describes the language as currently implemented — every example here compiles and runs on the current compiler.
 
+## Keywords
+
+Every reserved word in GopiLang, at a glance (see the linked section for full details on each):
+
+| Keyword | Meaning |
+|---------|---------|
+| `num`   | 32-bit signed integer type ([Types](#types)) |
+| `dec`   | double-precision floating point type ([Types](#types)) |
+| `flag`  | boolean type ([Types](#types)) |
+| `text`  | string type ([Types](#types)) |
+| `none`  | "no value" — function return type only ([Types](#types)) |
+| `yes` / `no` | boolean literals ([Types](#types)) |
+| `if` / `else` | conditional branching ([`if` / `else`](#if--else)) |
+| `loop`  | while-loop ([`loop`](#loop)) |
+| `run`   | C-style for-loop, desugared to `loop` ([`run`](#run)) |
+| `new`   | array creation (`new elementType[size]`) ([Arrays](#arrays)) |
+| `give`  | return statement ([Functions](#functions)) |
+| `show`  | print statement ([`show`](#show)) |
+
 ## Comments
 
 Line comments only, starting with `//` and running to end of line:
@@ -83,7 +102,7 @@ num sum(num[] values) {
 Assigning one array-typed value to another requires an **exact** type match — there is no `num[]`-to-`dec[]` widening the way there is for plain `num`-to-`dec`:
 
 ```
-dec[] a = new num[3];   // compile-time error: cannot assign 'INT[]' to variable of type 'FLOAT[]'
+dec[] a = new num[3];   // compile-time error: cannot assign 'num[]' to variable of type 'dec[]'
 ```
 
 Arithmetic and comparison operators do not accept array operands (`a + b` where `a`/`b` are arrays is a compile-time error), and an array cannot be passed directly to `show(...)` — only its elements or its `.len()`.
@@ -161,7 +180,42 @@ loop (i < 5) {
 }
 ```
 
-There is no `for`, `do`/`while`, `break`, or `continue` — `loop` is the only loop construct.
+There is no `do`/`while`, `break`, or `continue`.
+
+## `run`
+
+A C-style for-loop, with all three clauses mandatory:
+
+```
+run (num i = 0; i < 5; i = i + 1) {
+    show(i);
+}
+```
+
+`run` is pure syntactic sugar — the parser desugars it immediately into a `loop`, with no separate AST node, bytecode, or VM behavior of its own:
+
+```
+run (init; condition; increment) body
+   ≡
+{
+    init;
+    loop (condition) {
+        body
+        increment;
+    }
+}
+```
+
+The outer block means the init variable is scoped to the loop only (Java/C99-style), so two consecutive `run` loops may reuse the same variable name without conflict. The init clause may either declare a fresh variable (`num i = 0`) or reuse an existing one (`i = 0`), since both are just ordinary statements to the desugaring:
+
+```
+num i;
+run (i = 0; i < 5; i = i + 1) {
+    show(i);
+}
+```
+
+Because `run` becomes an ordinary `loop` before semantic analysis ever runs, its condition is checked exactly like `loop`'s (a diagnostic for a non-`flag` condition will describe it as a "while condition", since the analyzer genuinely does not know the source spelled it `run`) and `while (true)`'s reachability special-case applies identically to `run (init; yes; increment) { give ...; }`.
 
 ## Functions
 
@@ -215,12 +269,17 @@ type           ::= elementType ( "[" "]" )?
 elementType    ::= "num" | "dec" | "flag" | "text" | "none"
 
 block          ::= "{" statement* "}"
-statement      ::= variableDecl | ifStmt | whileStmt | returnStmt
+statement      ::= variableDecl | ifStmt | whileStmt | forStmt | returnStmt
                   | printStmt | exprStmt | block
 
 variableDecl   ::= type IDENTIFIER ("=" expression)? ";"
 ifStmt         ::= "if" "(" expression ")" statement ("else" statement)?
 whileStmt      ::= "loop" "(" expression ")" statement
+// forStmt is not its own AST node - the parser desugars it directly into
+// { forInit "loop" "(" expression ")" "{" statement expression ";" "}" },
+// i.e. an ordinary block/loop/block, before semantic analysis ever runs.
+forStmt        ::= "run" "(" forInit expression ";" expression ")" statement
+forInit        ::= variableDecl | expression ";"
 returnStmt     ::= "give" expression? ";"
 printStmt      ::= "show" "(" expression ")" ";"
 exprStmt       ::= expression ";"

@@ -13,4 +13,9 @@ public record TypeRef(PrimitiveType elementType, boolean isArray) {
     public String toString() {
         return isArray ? elementType + "[]" : elementType.toString();
     }
+
+    // For user-facing diagnostics only — see PrimitiveType.displayName().
+    public String displayName() {
+        return isArray ? elementType.displayName() + "[]" : elementType.displayName();
+    }
 }
