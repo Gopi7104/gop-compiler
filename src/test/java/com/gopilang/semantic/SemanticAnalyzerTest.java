@@ -40,6 +40,20 @@ class SemanticAnalyzerTest {
         return diagnostics.get(0);
     }
 
+    // Unlike assertSingleDiagnostic, doesn't require the diagnostic to be the
+    // ONLY one reported — needed for cases where a genuinely separate, correct
+    // fact cascades alongside it (e.g. an undefined struct return type also
+    // failing reachability, since an unreachable-in-practice return type
+    // still needs a real return statement on every path).
+    private static Diagnostic assertContainsDiagnostic(String source, ErrorPhase phase, String messageFragment) {
+        List<Diagnostic> diagnostics = analyze(source);
+        return diagnostics.stream()
+                .filter(d -> d.phase() == phase && d.message().contains(messageFragment))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError(
+                        "expected a diagnostic containing '" + messageFragment + "', got: " + diagnostics));
+    }
+
     @Nested
     class DuplicateFunctions {
 
@@ -562,48 +576,183 @@ class SemanticAnalyzerTest {
         }
     }
 
-    // Milestone S2, v3: struct names now parse in type position (variable
-    // type, parameter type, return type — see ParserTest.StructTypedDeclarations),
-    // but structs are not yet integrated into the type system at all. This
-    // temporary stub rejects every such use immediately, with one diagnostic
-    // per occurrence, regardless of whether the named struct was ever
-    // actually declared — replaced by real type-system support in Milestone S3.
+    // Milestone S3, v3: struct names parsed in type position (variable,
+    // parameter, return, and field type — see ParserTest.StructTypedDeclarations)
+    // are now real, nominal types. Since there is still no construction syntax
+    // or field access, a struct-typed PARAMETER (which begins definitely
+    // assigned, per analyzeFunction()) is the only way to get a real,
+    // usable struct value in these tests — every assignability/compatibility
+    // test below is built on that.
     @Nested
     class StructTypedDeclarations {
 
         @Test
-        void structTypedVariableDeclarationIsRejected() {
-            Diagnostic d = assertSingleDiagnostic(
-                    "struct Point { num x; } none main() { Point p; }", ErrorPhase.TYPE);
-            assertTrue(d.message().contains("struct types are not supported yet"));
+        void sameStructAssignmentSucceeds() {
+            assertNoDiagnostics("struct Point { num x; } none f(Point p, Point q) { p = q; } none main() { }");
         }
 
         @Test
-        void structTypedParameterIsRejected() {
+        void differentStructAssignmentIsRejected() {
+            // Point and Line have identical field shapes — this only fails
+            // because struct typing is nominal, not structural.
             Diagnostic d = assertSingleDiagnostic(
-                    "struct Point { num x; } none takesPoint(Point p) { } none main() { }", ErrorPhase.TYPE);
-            assertTrue(d.message().contains("struct types are not supported yet"));
+                    "struct Point { num x; } struct Line { num x; } "
+                            + "none f(Point p, Line l) { p = l; } none main() { }",
+                    ErrorPhase.TYPE);
+            assertTrue(d.message().contains("cannot assign 'Line' to variable of type 'Point'"));
         }
 
         @Test
-        void structTypedReturnTypeIsRejected() {
-            // No return statement in the body: the placeholder return type
-            // is treated as 'none', so an empty body neither triggers a
-            // reachability diagnostic nor a "cannot return a value" one —
-            // isolating the assertion to exactly the one stub diagnostic
-            // this test is about.
-            Diagnostic d = assertSingleDiagnostic(
-                    "struct Point { num x; } Point makePoint() { } none main() { }", ErrorPhase.TYPE);
-            assertTrue(d.message().contains("struct types are not supported yet"));
+        void sameStructArrayAssignmentSucceeds() {
+            assertNoDiagnostics(
+                    "struct Point { num x; } none f(Point[] a, Point[] b) { a = b; } none main() { }");
         }
 
         @Test
-        void unresolvedStructNameUsedAsATypeIsAlsoRejected() {
-            // The stub rejects the shape (a struct name in type position),
-            // not a resolved reference to a real struct — "not supported
-            // yet" applies either way until S3 adds real resolution.
-            Diagnostic d = assertSingleDiagnostic("none main() { NotAStruct p; }", ErrorPhase.TYPE);
-            assertTrue(d.message().contains("struct types are not supported yet"));
+        void differentStructArrayAssignmentIsRejected() {
+            Diagnostic d = assertSingleDiagnostic(
+                    "struct Point { num x; } struct Line { num x; } "
+                            + "none f(Point[] a, Line[] b) { a = b; } none main() { }",
+                    ErrorPhase.TYPE);
+            assertTrue(d.message().contains("cannot assign 'Line[]' to variable of type 'Point[]'"));
+        }
+
+        @Test
+        void structToPrimitiveAssignmentIsRejected() {
+            Diagnostic d = assertSingleDiagnostic(
+                    "struct Point { num x; } none f(Point p) { num n; n = p; } none main() { }",
+                    ErrorPhase.TYPE);
+            assertTrue(d.message().contains("cannot assign 'Point' to variable of type 'num'"));
+        }
+
+        @Test
+        void primitiveToStructAssignmentIsRejected() {
+            Diagnostic d = assertSingleDiagnostic(
+                    "struct Point { num x; } none f(Point p) { p = 5; } none main() { }", ErrorPhase.TYPE);
+            assertTrue(d.message().contains("cannot assign 'num' to variable of type 'Point'"));
+        }
+
+        @Test
+        void parameterCompatibilitySucceeds() {
+            assertNoDiagnostics(
+                    "struct Point { num x; } none takes(Point p) { } "
+                            + "none caller(Point p) { takes(p); } none main() { }");
+        }
+
+        @Test
+        void parameterCompatibilityIsRejected() {
+            Diagnostic d = assertSingleDiagnostic(
+                    "struct Point { num x; } struct Line { num x; } none takes(Point p) { } "
+                            + "none caller(Line l) { takes(l); } none main() { }",
+                    ErrorPhase.TYPE);
+            assertTrue(d.message().contains("argument 1 of 'takes': expected 'Point', found 'Line'"));
+        }
+
+        @Test
+        void returnCompatibilitySucceeds() {
+            assertNoDiagnostics("struct Point { num x; } Point identity(Point p) { give p; } none main() { }");
+        }
+
+        @Test
+        void returnCompatibilityIsRejected() {
+            Diagnostic d = assertSingleDiagnostic(
+                    "struct Point { num x; } struct Line { num x; } "
+                            + "Point identity(Line l) { give l; } none main() { }",
+                    ErrorPhase.TYPE);
+            assertTrue(d.message().contains("cannot return 'Line' from a function declared to return 'Point'"));
+        }
+
+        @Test
+        void forwardReferenceResolves() {
+            // Point is used as a parameter type before its own declaration.
+            assertNoDiagnostics("none f(Point p) { } struct Point { num x; } none main() { }");
+        }
+
+        @Test
+        void undefinedStructAsVariableTypeIsRejected() {
+            Diagnostic d = assertSingleDiagnostic("none main() { NotAStruct p; }", ErrorPhase.SEMANTIC);
+            assertTrue(d.message().contains("undefined struct 'NotAStruct'"));
+        }
+
+        @Test
+        void undefinedStructAsParameterTypeIsRejected() {
+            Diagnostic d = assertSingleDiagnostic("none f(NotAStruct p) { } none main() { }", ErrorPhase.SEMANTIC);
+            assertTrue(d.message().contains("undefined struct 'NotAStruct'"));
+        }
+
+        @Test
+        void undefinedStructAsReturnTypeIsRejected() {
+            // An empty body also fails reachability here (an undefined return
+            // type is never treated as 'none'), which is a separate, correct
+            // fact rather than a duplicate report of the same problem —
+            // assertContainsDiagnostic (not assertSingleDiagnostic) is exactly
+            // for this.
+            Diagnostic d = assertContainsDiagnostic(
+                    "NotAStruct make() { } none main() { }", ErrorPhase.SEMANTIC, "undefined struct 'NotAStruct'");
+            assertTrue(d.message().contains("undefined struct 'NotAStruct'"));
+        }
+
+        @Test
+        void undefinedStructAsFieldTypeIsRejected() {
+            Diagnostic d = assertSingleDiagnostic("struct Box { NotAStruct x; } none main() { }", ErrorPhase.SEMANTIC);
+            assertTrue(d.message().contains("undefined struct 'NotAStruct'"));
+        }
+
+        @Test
+        void undefinedStructArrayIsRejected() {
+            Diagnostic d = assertSingleDiagnostic("none main() { NotAStruct[] arr; }", ErrorPhase.SEMANTIC);
+            assertTrue(d.message().contains("undefined struct 'NotAStruct'"));
+        }
+
+        @Test
+        void printingAStructIsRejected() {
+            Diagnostic d = assertSingleDiagnostic(
+                    "struct Point { num x; } none f(Point p) { show(p); } none main() { }", ErrorPhase.TYPE);
+            assertTrue(d.message().contains("cannot print a value of type 'Point'"));
+        }
+
+        @Test
+        void binaryOperatorOnStructsIsRejected() {
+            Diagnostic d = assertSingleDiagnostic(
+                    "struct Point { num x; } none f(Point p, Point q) { p + q; } none main() { }", ErrorPhase.TYPE);
+            assertTrue(d.message().contains("operator '+' cannot be applied to 'Point' and 'Point'"));
+        }
+
+        @Test
+        void unaryOperatorOnStructIsRejected() {
+            Diagnostic d = assertSingleDiagnostic(
+                    "struct Point { num x; } none f(Point p) { !p; } none main() { }", ErrorPhase.TYPE);
+            assertTrue(d.message().contains("operator '!' cannot be applied to 'Point'"));
+        }
+
+        @Test
+        void directSelfRecursionIsRejected() {
+            Diagnostic d = assertSingleDiagnostic("struct Node { Node next; } none main() { }", ErrorPhase.SEMANTIC);
+            assertTrue(d.message().contains("struct 'Node' cannot contain itself"));
+        }
+
+        @Test
+        void indirectRecursionIsRejected() {
+            Diagnostic d = assertSingleDiagnostic(
+                    "struct A { B b; } struct B { A a; } none main() { }", ErrorPhase.SEMANTIC);
+            assertTrue(d.message().contains("cannot contain itself"));
+        }
+
+        @Test
+        void arrayMediatedSelfReferenceIsAccepted() {
+            // An array field is a runtime reference, not inline storage — it
+            // cannot create an unbounded-size cycle, so this is legal.
+            assertNoDiagnostics("struct Node { Node[] children; } none main() { }");
+        }
+
+        @Test
+        void diamondDependencyGraphIsNotACycle() {
+            // B and C both reference A — shared, not mutual, containment.
+            // A naive "have I seen this struct name before" check (instead of
+            // proper onPath/seen tracking) would misreport this as a cycle.
+            assertNoDiagnostics(
+                    "struct A { num x; } struct B { A a; } struct C { A a; } "
+                            + "struct D { B b; C c; } none main() { }");
         }
 
         @Test

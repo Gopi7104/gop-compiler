@@ -15,19 +15,37 @@ import java.util.Optional;
  * independent testability.
  * <p>
  * {@code resultOfUnary}/{@code resultOfBinary} stay {@code PrimitiveType}-only
- * on purpose: arrays never reach them — {@code SemanticAnalyzer.typeOf}
- * rejects an array-typed operand for every operator before calling in here
- * at all, so these two methods never need to know arrays exist.
+ * on purpose: arrays and structs never reach them — {@code
+ * SemanticAnalyzer.typeOf} rejects an array-typed or struct-typed operand for
+ * every operator before calling in here at all, so these two methods never
+ * need to know arrays or structs exist.
  */
 public final class TypeRules {
 
     private TypeRules() {
     }
 
-    /** Whether a value of type {@code from} may be used where {@code to} is expected (equal types, or {@code int} widening to {@code float}; arrays require an exact element-type match, never widened). */
+    /**
+     * Whether a value of type {@code from} may be used where {@code to} is
+     * expected. Array-ness must match exactly on both sides first (no
+     * widening, struct or primitive alike). A struct type is nominal: it is
+     * compatible only with another struct type of the exact same name, never
+     * with a primitive and never by structural (field-shape) equivalence —
+     * checked via {@code structName()} before {@code elementType()} is ever
+     * consulted, since {@code elementType()} means nothing for a struct type
+     * (see {@code TypeRef}'s javadoc). Only once neither side is a struct
+     * does the original primitive-only rule (equal types, or {@code int}
+     * widening to {@code float}) apply.
+     */
     public static boolean isAssignable(TypeRef from, TypeRef to) {
-        if (from.isArray() || to.isArray()) {
-            return from.isArray() == to.isArray() && from.elementType() == to.elementType();
+        if (from.isArray() != to.isArray()) {
+            return false;
+        }
+        if (from.structName().isPresent() || to.structName().isPresent()) {
+            return from.structName().equals(to.structName());
+        }
+        if (from.isArray()) {
+            return from.elementType() == to.elementType();
         }
         return isAssignable(from.elementType(), to.elementType());
     }
@@ -71,9 +89,9 @@ public final class TypeRules {
         };
     }
 
-    /** Whether {@code show(...)} accepts a value of this type (every scalar primitive except {@code none}; no array). */
+    /** Whether {@code show(...)} accepts a value of this type (every scalar primitive except {@code none}; no array; no struct). */
     public static boolean isPrintable(TypeRef type) {
-        if (type.isArray()) {
+        if (type.isArray() || type.structName().isPresent()) {
             return false;
         }
         return switch (type.elementType()) {

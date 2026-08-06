@@ -34,6 +34,7 @@ import com.gopilang.util.SourceRange;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
@@ -133,15 +134,17 @@ public final class SemanticAnalyzer {
     }
 
     // Pass 1, structs: register every struct's field list before functions are
-    // registered, so a function signature could in principle already refer to
-    // a struct declared later in the file (forward reference) — not yet
-    // exercised, since struct names aren't legal field/parameter/variable
-    // types until a later milestone, but the ordering is established now
-    // rather than needing to be revisited when it starts to matter. Duplicate
-    // struct names, and duplicate field names within one struct, are
-    // reported, not thrown — mirroring registerFunctions()'s and
-    // analyzeFunction()'s own parameter-duplicate handling exactly: the first
-    // declaration stays authoritative.
+    // registered, so a function signature can already refer to a struct
+    // declared later in the file (forward reference). Duplicate struct names,
+    // and duplicate field names within one struct, are reported, not thrown —
+    // mirroring registerFunctions()'s and analyzeFunction()'s own
+    // parameter-duplicate handling exactly: the first declaration stays
+    // authoritative. As of Milestone S3, once every struct is registered, a
+    // second pass resolves each field's own type (a field may itself be
+    // struct-typed or array-of-struct-typed — see parseDeclaredType()), and a
+    // third pass detects cyclic struct containment; both need the complete
+    // structTable, so neither can run interleaved with the registration loop
+    // above.
     private void registerStructs() {
         for (StructDeclaration structDecl : program.structs()) {
             // A throwaway Scope, used only for its existing putIfAbsent-based
@@ -167,6 +170,60 @@ public final class SemanticAnalyzer {
                         "previous declaration was at " + existing.declaredAt()));
             }
         }
+
+        for (StructDeclaration structDecl : program.structs()) {
+            for (Parameter field : structDecl.fields()) {
+                resolveDeclaredType(field.type(), field.range());
+            }
+        }
+
+        detectStructCycles();
+    }
+
+    // A struct-typed field creates a "must be fully contained" edge in the
+    // struct dependency graph — but only when it is NOT an array: an array
+    // field is a runtime reference (a plain Object[], per CodeGenerator/the
+    // VM), not inline storage, so it can never make a struct's size
+    // unbounded the way direct containment would. Standard DFS with the two
+    // sets a cycle check needs: onPath (the current recursion stack — a back
+    // edge into this set is the cycle) and seen (permanently processed, so a
+    // struct reachable from more than one root, e.g. a diamond dependency, is
+    // never re-explored and never misreported as a cycle). One diagnostic per
+    // back edge found, reported at the field that creates it.
+    private void detectStructCycles() {
+        Set<String> seen = new HashSet<>();
+        for (String name : structTable.keySet()) {
+            if (!seen.contains(name)) {
+                visitForCycle(name, seen, new HashSet<>());
+            }
+        }
+    }
+
+    private void visitForCycle(String name, Set<String> seen, Set<String> onPath) {
+        seen.add(name);
+        onPath.add(name);
+        for (Parameter field : structTable.get(name).fields()) {
+            TypeRef fieldType = field.type();
+            if (fieldType.isArray() || fieldType.structName().isEmpty()) {
+                continue; // array field: no containment edge. primitive field: no edge at all.
+            }
+            String referenced = fieldType.structName().get();
+            if (!structTable.containsKey(referenced)) {
+                continue; // undefined struct, already reported by resolveDeclaredType()
+            }
+            if (onPath.contains(referenced)) {
+                reporter.report(new Diagnostic(
+                        ErrorPhase.SEMANTIC,
+                        field.range(),
+                        "struct '" + name + "' cannot contain itself (directly or indirectly) via field '"
+                                + field.name() + "'",
+                        "'" + field.name() + "' has type '" + referenced
+                                + "', which (directly or indirectly) contains '" + name + "' again"));
+            } else if (!seen.contains(referenced)) {
+                visitForCycle(referenced, seen, onPath);
+            }
+        }
+        onPath.remove(name);
     }
 
     // Pass 1: register every function's signature before analyzing any body,
@@ -176,9 +233,9 @@ public final class SemanticAnalyzer {
     // so later, unrelated references aren't affected by the duplicate.
     private void registerFunctions() {
         for (FunctionDeclaration function : program.functions()) {
-            checkNotStructType(function.structReturnTypeName(), function.range());
+            resolveDeclaredType(function.returnType(), function.range());
             for (Parameter parameter : function.parameters()) {
-                checkNotStructType(parameter.structTypeName(), parameter.range());
+                resolveDeclaredType(parameter.type(), parameter.range());
             }
 
             FunctionSymbol symbol = new FunctionSymbol(
@@ -198,18 +255,23 @@ public final class SemanticAnalyzer {
         }
     }
 
-    // Milestone S2: struct names now parse in type position (return type,
-    // parameter type, variable type), but structs are not yet integrated into
-    // the type system at all — this is the temporary stub that rejects every
-    // such use immediately, until Milestone S3 replaces it with real
-    // type-system support. One diagnostic per occurrence, reported where the
-    // type was written, exactly like every other type-position check here.
-    private void checkNotStructType(Optional<String> structTypeName, SourceRange range) {
-        structTypeName.ifPresent(name -> reporter.report(new Diagnostic(
-                ErrorPhase.TYPE,
-                range,
-                "struct types are not supported yet",
-                "'" + name + "' is a struct type; using a struct as a type is not implemented until a later milestone")));
+    // Resolution for a declared type's struct name, if it has one — a field,
+    // parameter, return type, or variable type may all name a struct that was
+    // never declared. Reported once, at the exact position the type was
+    // written, mirroring "undefined function"/"undefined variable" exactly.
+    // A struct that DOES resolve needs no further action here: its TypeRef
+    // already carries the real name, so TypeRules' nominal comparisons work
+    // correctly from this point on with no separate "resolved" marker needed.
+    private void resolveDeclaredType(TypeRef type, SourceRange range) {
+        type.structName().ifPresent(name -> {
+            if (!structTable.containsKey(name)) {
+                reporter.report(new Diagnostic(
+                        ErrorPhase.SEMANTIC,
+                        range,
+                        "undefined struct '" + name + "'",
+                        "declare 'struct " + name + " { ... }' before using it as a type"));
+            }
+        });
     }
 
     // Pass 2: scope management and identifier resolution only — no type
@@ -301,16 +363,7 @@ public final class SemanticAnalyzer {
                 currentScope = enclosing; // leaving the scope: just stop using the child
             }
             case VariableDeclaration decl -> {
-                // Milestone S2 stub: a struct-typed declaration is rejected
-                // immediately and skips every other check below — decl.type()
-                // is only a placeholder for this declaration (see Parser's
-                // STRUCT_TYPE_PLACEHOLDER), so none of the normal
-                // initializer-compatibility or symbol-registration logic
-                // (which trusts decl.type() to be a real type) may run.
-                if (decl.structTypeName().isPresent()) {
-                    checkNotStructType(decl.structTypeName(), decl.range());
-                    return;
-                }
+                resolveDeclaredType(decl.type(), decl.range());
 
                 // Checked before insertion, deliberately — a variable's own
                 // initializer must not be able to see itself (num y = y + 1;
@@ -580,7 +633,7 @@ public final class SemanticAnalyzer {
                 if (operandType.isEmpty()) {
                     yield Optional.empty();
                 }
-                if (operandType.get().isArray()) {
+                if (operandType.get().isArray() || operandType.get().structName().isPresent()) {
                     reporter.report(new Diagnostic(
                             ErrorPhase.TYPE,
                             unary.range(),
@@ -609,7 +662,8 @@ public final class SemanticAnalyzer {
                 if (leftType.isEmpty() || rightType.isEmpty()) {
                     yield Optional.empty();
                 }
-                if (leftType.get().isArray() || rightType.get().isArray()) {
+                if (leftType.get().isArray() || rightType.get().isArray()
+                        || leftType.get().structName().isPresent() || rightType.get().structName().isPresent()) {
                     reporter.report(new Diagnostic(
                             ErrorPhase.TYPE,
                             binary.range(),

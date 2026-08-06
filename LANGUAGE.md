@@ -112,7 +112,7 @@ There is no array-literal syntax (e.g. `[1, 2, 3]`) — every array is created w
 
 ## Structs
 
-**Status: declarations, plus struct names accepted as types syntactically — semantic analysis still rejects any actual use.** A `struct` can be declared and its fields are checked for duplicates. As of Milestone S2, a struct name may also be written wherever a variable type, parameter type, or return type is expected, and it parses successfully — but semantic analysis immediately rejects it with a temporary "struct types are not supported yet" diagnostic. This is deliberate: S2 is a parser-only milestone that clears the grammar's declaration-vs-expression ambiguity out of the way; real struct type-system support (resolution, assignability, construction) starts in Milestone S3.
+**Status: a real, nominal type — declaration, resolution, and full type-checking are implemented; construction and field access are not.** A struct name may be used anywhere a type is legal — a variable's type, a parameter's type, a function's return type, or another struct's field type — and (as of Milestone S3) is properly integrated into the type system: assignability, argument/return compatibility, and printability all understand structs, nominally (by name, never by field-shape).
 
 ```
 struct Point {
@@ -120,25 +120,30 @@ struct Point {
     num y;
 }
 
+none identity(Point p) {
+    give p;
+}
+
 none main() {
-    Point p;   // parses; rejected by semantic analysis: "struct types are not supported yet"
+    Point p;          // legal: a real, resolved struct type
 }
 ```
 
-Each field is a type and a name, exactly like a function parameter (`type IDENTIFIER;`). A struct may have zero or more fields, and multiple structs may be declared in one file, in any order.
+Each field is a type and a name, exactly like a function parameter (`type IDENTIFIER;`), and — unlike a plain variable/parameter/return type — a field may itself be struct-typed or array-of-struct-typed (subject to the cycle rule below). A struct may have zero or more fields, and multiple structs may be declared in one file, in any order (forward references resolve).
 
 Currently supported:
-- Declaring a struct with any number of fields, each of a primitive type (`num`, `dec`, `flag`, `text`, `none`)
-- Duplicate struct names are a compile-time error
-- Duplicate field names within one struct are a compile-time error (fields in *different* structs may share a name freely — each struct's fields are their own namespace)
+- Declaring a struct with any number of fields, each either a primitive type or a struct type (including the struct's own name — see the recursion rule below)
+- Duplicate struct names, and duplicate field names within one struct, are compile-time errors
 - A struct name may be reused as a function name with no conflict — structs and functions are resolved in separate contexts
-- A struct name parses as a variable type, parameter type, or return type (Milestone S2) — but is always rejected by semantic analysis with a temporary stub diagnostic; there is no working struct-typed declaration yet
+- A struct name is a legal variable type, parameter type, return type, or field type, and (with `[]`) so is an array of that struct — `Point p;`, `Point[] points;`, `none foo(Point p);`, `Point[] make();` are all valid
+- **Nominal typing**: two structs with identical fields are still incompatible types — `Point`-typed and `Line`-typed values are never interchangeable just because their fields happen to match
+- Assignment, argument passing, and return values all require an exact struct-name match (or an exact array-of-that-struct match — arrays never widen, matching primitive arrays); referencing an undeclared struct name as a type is a compile-time error ("undefined struct 'X'")
+- **Cycle detection**: a struct cannot contain itself, directly or indirectly, through a non-array field (`struct Node { Node next; }` and `struct A { B b; } struct B { A a; }` are both compile-time errors), but *can* reference itself through an array field (`struct Node { Node[] children; }` is legal) — an array is a runtime reference, not inline storage, so it can't create an unbounded-size struct
+- A struct value cannot be printed (`show(...)`) and cannot be used as an operand to any arithmetic, comparison, or logical operator
 
 **Explicitly not yet supported** (planned for later milestones, not oversights):
-- No actual struct-typed variable, parameter, or return value works yet — the temporary semantic stub rejects every one (Milestone S3 replaces this with real type-system integration)
-- There is no struct construction syntax (no `new Point(...)` yet)
+- There is no struct construction syntax (no `new Point(...)` yet) — the only way to obtain a definitely-assigned value of a struct type in a program today is a function parameter
 - There is no field access (`point.x`) or field assignment (`point.x = 5`) yet
-- A struct field cannot itself be another struct (field types stay primitive-only, unaffected by S2)
 
 ## Variables
 
@@ -302,26 +307,30 @@ Informal EBNF-style summary of the current grammar (see [`Parser.java`](src/main
 program        ::= (functionDecl | structDecl)* EOF
 
 structDecl     ::= "struct" IDENTIFIER "{" field* "}"
-field          ::= type IDENTIFIER ";"                 // identical shape to `parameter` below
-                  // fields stay primitive-only (elementType) — no struct-typed fields (S2 scope)
+field          ::= declaredType IDENTIFIER ";"         // identical shape to `parameter` below
 
 functionDecl   ::= declaredType IDENTIFIER "(" parameters? ")" block
 parameters     ::= parameter ("," parameter)*
 parameter      ::= declaredType IDENTIFIER
-declaredType   ::= type | IDENTIFIER
-                  // IDENTIFIER = a struct name used as a type (Milestone S2); parses
-                  // successfully, but semantic analysis rejects it immediately with a
-                  // temporary "struct types are not supported yet" diagnostic until S3
+declaredType   ::= type | IDENTIFIER ( "[" "]" )?
+                  // IDENTIFIER = a struct name used as a type, e.g. "Point" or "Point[]" —
+                  // the ONE type production used for every type position (field,
+                  // parameter, return type, variable); real, nominal struct types since
+                  // Milestone S3
 type           ::= elementType ( "[" "]" )?
 elementType    ::= "num" | "dec" | "flag" | "text" | "none"
 
 block          ::= "{" statement* "}"
 statement      ::= variableDecl | ifStmt | whileStmt | forStmt | returnStmt
                   | printStmt | exprStmt | block
-                  // "IDENTIFIER IDENTIFIER" at statement start (e.g. "Point p") is what
-                  // distinguishes a struct-typed variableDecl from an exprStmt starting
-                  // with a plain identifier ("p = 5", "foo()") — see Parser.
-                  // isStructTypedDeclarationStart() for the one-token lookahead this needs
+                  // A statement starting with IDENTIFIER is ambiguous: "Point p;" (a
+                  // struct-typed variableDecl) vs "p = 5;"/"foo();" (an exprStmt) vs, as
+                  // of Milestone S3, "Point[] arr;" (also a variableDecl) vs "arr[i] = 5;"
+                  // (also an exprStmt) — both pairs share the same first one or two
+                  // tokens. Parser.isStructTypedDeclarationStart() resolves both with a
+                  // small, fixed lookahead (at most 3 tokens, no backtracking): two
+                  // IDENTIFIERs in a row, or IDENTIFIER "[" "]" (an index expression can
+                  // never be empty, so that shape is unambiguously a type suffix)
 
 variableDecl   ::= declaredType IDENTIFIER ("=" expression)? ";"
 ifStmt         ::= "if" "(" expression ")" statement ("else" statement)?

@@ -1,0 +1,33 @@
+// cyclic_structs.gopi
+// Expected: 2 diagnostics (both SEMANTIC):
+//   1. "struct 'Node' cannot contain itself (directly or indirectly) via
+//      field 'next'" — a struct field cannot be its own struct type: that
+//      would require infinite storage, since a struct field is stored
+//      inline, not as a reference.
+//   2. "struct '...' cannot contain itself (directly or indirectly) via
+//      field '...'" for A/B — the same rule applies indirectly (A contains
+//      B, B contains A); which of the two is named depends on registration
+//      order, not something this example relies on.
+//
+// Contrast with Ok, below, which is NOT rejected: an array field is a
+// runtime reference (a plain array, not inline storage), so a struct
+// referencing its own type through an array is perfectly finite and legal.
+
+struct Node {
+    Node next;
+}
+
+struct A {
+    B b;
+}
+
+struct B {
+    A a;
+}
+
+struct Ok {
+    Ok[] children;
+}
+
+none main() {
+}

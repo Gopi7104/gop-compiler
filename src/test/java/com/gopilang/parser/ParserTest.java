@@ -609,15 +609,17 @@ class ParserTest {
         }
     }
 
-    // Milestone S2, v3: struct names are now accepted in type position
-    // (variable type, parameter type, return type) via the smallest lookahead
-    // needed to resolve the "Point p;" (declaration) vs "p = ...;"
-    // (assignment) vs "foo();" (call) ambiguity at statement start — see
-    // Parser.isStructTypedDeclarationStart(). Everything else about structs
-    // stays exactly as Milestone S1 left it (declaration-only; no
-    // construction, no field access) — a parsed struct-typed declaration is
-    // rejected by semantic analysis's temporary stub (see
-    // SemanticAnalyzerTest.StructTypedDeclarations), not by the parser.
+    // Struct names are accepted in type position (variable type, parameter
+    // type, return type, and — as of Milestone S3 — field type) via the
+    // smallest lookahead needed to resolve the "Point p;" (declaration) vs
+    // "p = ...;" (assignment) vs "foo();" (call) ambiguity at statement start
+    // — see Parser.isStructTypedDeclarationStart(). As of Milestone S3, an
+    // array of a struct type ("Point[] arr;") is also legal everywhere a type
+    // is legal, which adds a second ambiguity at statement start ("Point[]
+    // arr;" vs "arr[i] = 5;", both starting IDENTIFIER LEFT_BRACKET) resolved
+    // by one more token of fixed lookahead. Whether a struct name actually
+    // resolves to a real, non-cyclic struct is semantic analysis's job (see
+    // SemanticAnalyzerTest.StructTypedDeclarations), not the parser's.
     @Nested
     class StructTypedDeclarations {
 
@@ -734,6 +736,111 @@ class ParserTest {
                             └── ExpressionStatement
                                 └── FunctionCallExpression Point(0 args)
                     """, parseAndPrint("none main() { Point(); }"));
+        }
+
+        @Test
+        void structFieldParses() {
+            assertEquals("""
+                    Program
+                    ├── StructDeclaration Point
+                    │   └── Parameter INT x
+                    ├── StructDeclaration Box
+                    │   └── Parameter Point corner
+                    └── FunctionDeclaration main() -> VOID
+                        └── BlockStatement
+                    """, parseAndPrint("struct Point { num x; } struct Box { Point corner; } none main() { }"));
+        }
+
+        @Test
+        void selfReferencingFieldParsesSyntactically() {
+            // The parser has no cycle concept — "Node next;" parses exactly
+            // like any other struct-typed field. Semantic analysis is what
+            // rejects this (see SemanticAnalyzerTest.StructTypedDeclarations).
+            assertEquals("""
+                    Program
+                    ├── StructDeclaration Node
+                    │   └── Parameter Node next
+                    └── FunctionDeclaration main() -> VOID
+                        └── BlockStatement
+                    """, parseAndPrint("struct Node { Node next; } none main() { }"));
+        }
+
+        @Test
+        void arrayOfStructVariableDeclarationParses() {
+            assertEquals("""
+                    Program
+                    ├── StructDeclaration Point
+                    │   └── Parameter INT x
+                    └── FunctionDeclaration main() -> VOID
+                        └── BlockStatement
+                            └── VariableDeclaration Point[] arr
+                    """, parseAndPrint("struct Point { num x; } none main() { Point[] arr; }"));
+        }
+
+        @Test
+        void arrayOfStructParameterParses() {
+            assertEquals("""
+                    Program
+                    ├── StructDeclaration Point
+                    │   └── Parameter INT x
+                    └── FunctionDeclaration takesPoints() -> VOID
+                        ├── Parameter Point[] p
+                        └── BlockStatement
+                    """, parseAndPrint("struct Point { num x; } none takesPoints(Point[] p) { }"));
+        }
+
+        @Test
+        void arrayOfStructReturnTypeParses() {
+            assertEquals("""
+                    Program
+                    ├── StructDeclaration Point
+                    │   └── Parameter INT x
+                    └── FunctionDeclaration makePoints() -> Point[]
+                        └── BlockStatement
+                    """, parseAndPrint("struct Point { num x; } Point[] makePoints() { }"));
+        }
+
+        @Test
+        void arrayOfStructFieldParses() {
+            assertEquals("""
+                    Program
+                    ├── StructDeclaration Point
+                    │   └── Parameter INT x
+                    ├── StructDeclaration Box
+                    │   └── Parameter Point[] corners
+                    └── FunctionDeclaration main() -> VOID
+                        └── BlockStatement
+                    """, parseAndPrint("struct Point { num x; } struct Box { Point[] corners; } none main() { }"));
+        }
+
+        @Test
+        void arrayOfSelfReferencingFieldParses() {
+            assertEquals("""
+                    Program
+                    ├── StructDeclaration Node
+                    │   └── Parameter Node[] children
+                    └── FunctionDeclaration main() -> VOID
+                        └── BlockStatement
+                    """, parseAndPrint("struct Node { Node[] children; } none main() { }"));
+        }
+
+        @Test
+        void indexAssignmentStatementStillParsesAsAnExpressionStatement() {
+            // "arr[0] = 5;" starts IDENTIFIER LEFT_BRACKET, the same as
+            // "Point[] arr;" — the third token (a real index expression, not
+            // an immediate ']') is what keeps this parsing as an ordinary
+            // index assignment rather than being misread as a declaration.
+            assertEquals("""
+                    Program
+                    └── FunctionDeclaration main() -> VOID
+                        └── BlockStatement
+                            ├── VariableDeclaration INT[] arr
+                            └── ExpressionStatement
+                                └── IndexAssignmentExpression
+                                    ├── VariableExpression arr
+                                    ├── LiteralExpression 0 (INT)
+                                    └── LiteralExpression 5 (INT)
+                    """, parseAndPrint("none main() { num[] arr; arr[0] = 5; }"));
         }
     }
 
