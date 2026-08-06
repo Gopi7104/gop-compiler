@@ -20,6 +20,11 @@
 /Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/ast/VariableDeclaration.java
 /Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/ast/VariableExpression.java
 /Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/ast/WhileStatement.java
+/Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/bytecode/BytecodeFunction.java
+/Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/bytecode/BytecodeModule.java
+/Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/bytecode/CodeGenerator.java
+/Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/bytecode/Instruction.java
+/Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/bytecode/Opcode.java
 /Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/cli/GopiC.java
 /Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/errors/Diagnostic.java
 /Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/errors/DiagnosticReporter.java
@@ -41,3 +46,5 @@
 /Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/types/PrimitiveType.java
 /Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/util/SourceLocation.java
 /Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/util/SourceRange.java
+/Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/vm/Frame.java
+/Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/vm/VirtualMachine.java
