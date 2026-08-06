@@ -1,0 +1,12 @@
+// parameters.gopi
+// Expected: 0 diagnostics.
+// Parameters begin assigned — a and b can be read immediately, with no
+// initializer and no explicit assignment.
+
+int add(int a, int b) {
+    return a + b;
+}
+
+void main() {
+    print(add(1, 2));
+}

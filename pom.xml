@@ -26,11 +26,93 @@
     </dependencies>
 
     <build>
+        <finalName>gopilang</finalName>
         <plugins>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>3.2.5</version>
+            </plugin>
+
+            <!-- Gives the plain jar (target/gopilang.jar) a Main-Class manifest entry,
+                 so it is directly runnable via "java -jar" even before shading. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <version>3.4.2</version>
+                <configuration>
+                    <archive>
+                        <manifest>
+                            <mainClass>com.gopilang.cli.GopiC</mainClass>
+                        </manifest>
+                    </archive>
+                </configuration>
+            </plugin>
+
+            <!-- Repackages target/gopilang.jar into a self-contained executable jar,
+                 bundling any compile-scope dependencies (there are none today — only
+                 JUnit, which is test-scoped and never bundled). Keeping this in place
+                 now means the distribution's launcher script never has to change if a
+                 real dependency is added later. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-shade-plugin</artifactId>
+                <version>3.5.0</version>
+                <executions>
+                    <execution>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>shade</goal>
+                        </goals>
+                        <configuration>
+                            <transformers>
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                                    <mainClass>com.gopilang.cli.GopiC</mainClass>
+                                </transformer>
+                            </transformers>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <!-- Assembles target/gopilang/ — the relocatable distribution folder
+                 (bin/, lib/, examples/, README.md) — from the shaded jar and the
+                 project's own source tree. Runs in the "package" phase, after the
+                 two plugins above, so "mvn package" alone produces it. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-antrun-plugin</artifactId>
+                <version>3.1.0</version>
+                <executions>
+                    <execution>
+                        <id>assemble-distribution</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>run</goal>
+                        </goals>
+                        <configuration>
+                            <target>
+                                <mkdir dir="${project.build.directory}/gopilang/bin"/>
+                                <mkdir dir="${project.build.directory}/gopilang/lib"/>
+                                <mkdir dir="${project.build.directory}/gopilang/examples"/>
+
+                                <copy file="${project.build.directory}/${project.build.finalName}.jar"
+                                      tofile="${project.build.directory}/gopilang/lib/gopilang.jar"/>
+
+                                <copy file="${project.basedir}/src/main/scripts/gopic"
+                                      tofile="${project.build.directory}/gopilang/bin/gopic"/>
+                                <chmod file="${project.build.directory}/gopilang/bin/gopic" perm="755"/>
+
+                                <copy todir="${project.build.directory}/gopilang/examples">
+                                    <fileset dir="${project.basedir}/examples"/>
+                                </copy>
+
+                                <copy file="${project.basedir}/README.md"
+                                      tofile="${project.build.directory}/gopilang/README.md"/>
+                            </target>
+                        </configuration>
+                    </execution>
+                </executions>
             </plugin>
         </plugins>
     </build>

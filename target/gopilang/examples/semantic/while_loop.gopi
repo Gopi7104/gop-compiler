@@ -1,0 +1,16 @@
+// while_loop.gopi
+// Expected: 1 diagnostic (SEMANTIC) — "variable 'x' might not have been
+// assigned a value", on the final print(x). A while loop's body might
+// execute zero times (conservatively, even here, where the condition happens
+// to be a literal `true`), so an assignment made only inside it is never
+// considered definite afterward. The read/write of x INSIDE the loop body
+// itself is fine — sequential assignment within the same block.
+
+void main() {
+    int x;
+    while (true) {
+        x = 5;
+        print(x);
+    }
+    print(x);
+}

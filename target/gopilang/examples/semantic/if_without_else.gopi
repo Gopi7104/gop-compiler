@@ -1,0 +1,12 @@
+// if_without_else.gopi
+// Expected: 1 diagnostic (SEMANTIC) — "variable 'x' might not have been
+// assigned a value". The if has no else, so the false path skips the
+// assignment entirely; x cannot be considered definitely assigned afterward.
+
+void main() {
+    int x;
+    if (true) {
+        x = 5;
+    }
+    print(x);
+}

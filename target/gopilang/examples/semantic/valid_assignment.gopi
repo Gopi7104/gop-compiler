@@ -1,0 +1,12 @@
+// valid_assignment.gopi
+// Expected: 0 diagnostics.
+// x is assigned via its initializer, y is assigned via a later plain
+// assignment before being read — both are definitely assigned by the time
+// print() reads them.
+
+void main() {
+    int x = 5;
+    int y;
+    y = 10;
+    print(x + y);
+}
