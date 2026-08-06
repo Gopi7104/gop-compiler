@@ -9,6 +9,7 @@ import com.gopilang.lexer.Lexer;
 import com.gopilang.lexer.Token;
 import com.gopilang.parser.Parser;
 import com.gopilang.printer.AstPrinter;
+import com.gopilang.printer.BytecodeDisassembler;
 import com.gopilang.semantic.SemanticAnalyzer;
 import com.gopilang.semantic.SemanticModel;
 import com.gopilang.vm.VirtualMachine;
@@ -18,8 +19,18 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 
+/**
+ * Command-line entry point for the GopiLang compiler and VM. Pure
+ * orchestration: every phase it touches (lexer, parser, semantic analyzer,
+ * code generator, VM) already owns its own logic — this class only
+ * sequences them and renders diagnostics, it adds no compiler behavior of
+ * its own. Modes: {@code gopic <file.gopi>} compiles and runs a program;
+ * {@code --tokens}/{@code --ast}/{@code --disassemble} inspect an earlier
+ * pipeline stage without running the VM.
+ */
 public final class GopiC {
 
+    /** Dispatches to the requested mode based on {@code args}, or prints usage if none match. */
     public static void main(String[] args) throws IOException {
         if (args.length == 1 && !args[0].startsWith("--")) {
             run(Path.of(args[0]));
@@ -27,28 +38,40 @@ public final class GopiC {
             printTokens(Path.of(args[1]));
         } else if (args.length == 2 && args[0].equals("--ast")) {
             printAst(Path.of(args[1]));
+        } else if (args.length == 2 && args[0].equals("--disassemble")) {
+            disassemble(Path.of(args[1]));
         } else {
             printUsage();
         }
     }
 
     private static void run(Path sourceFile) throws IOException {
+        BytecodeModule module = compileToBytecode(sourceFile);
+        new VirtualMachine(module).run();
+    }
+
+    private static void disassemble(Path sourceFile) throws IOException {
+        BytecodeModule module = compileToBytecode(sourceFile);
+        System.out.print(BytecodeDisassembler.disassemble(module));
+    }
+
+    private static BytecodeModule compileToBytecode(Path sourceFile) throws IOException {
         if (!sourceFile.toString().endsWith(".gopi")) {
             System.err.println("Error: expected a .gopi source file, got: " + sourceFile);
             System.exit(1);
-            return;
+            return null;
         }
         if (!Files.exists(sourceFile)) {
             System.err.println("Error: file not found: " + sourceFile);
             System.exit(1);
-            return;
+            return null;
         }
 
         String source = Files.readString(sourceFile);
         if (source.isBlank()) {
             System.err.println("Error: file is empty: " + sourceFile);
             System.exit(1);
-            return;
+            return null;
         }
         String[] sourceLines = source.split("\n", -1);
 
@@ -61,7 +84,7 @@ public final class GopiC {
             printDiagnostics("lexical", lexer.reporter(), sourceLines);
             printDiagnostics("syntax", parser.reporter(), sourceLines);
             System.exit(1);
-            return;
+            return null;
         }
 
         SemanticAnalyzer analyzer = new SemanticAnalyzer(program);
@@ -70,11 +93,10 @@ public final class GopiC {
         if (analyzer.reporter().hasErrors()) {
             printDiagnostics("semantic", analyzer.reporter(), sourceLines);
             System.exit(1);
-            return;
+            return null;
         }
 
-        BytecodeModule module = new CodeGenerator(program, semanticModel).generate();
-        new VirtualMachine(module).run();
+        return new CodeGenerator(program, semanticModel).generate();
     }
 
     private static void printTokens(Path sourceFile) throws IOException {
@@ -127,6 +149,7 @@ public final class GopiC {
     }
 
     private static void printUsage() {
-        System.out.println("Usage: gopic <file.gopi>  |  gopic --tokens <file.gopi>  |  gopic --ast <file.gopi>");
+        System.out.println("Usage: gopic <file.gopi>  |  gopic --tokens <file.gopi>  |  gopic --ast <file.gopi>"
+                + "  |  gopic --disassemble <file.gopi>");
     }
 }

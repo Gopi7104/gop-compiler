@@ -10,6 +10,13 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * Hand-written scanner that turns GopiLang source text into a flat list of
+ * {@link Token}s. Recovers from a bad character/literal via panic-mode
+ * (catches its own {@link LexerException}, reports a {@link Diagnostic},
+ * and resumes scanning from the next character) so one bad token doesn't
+ * abort the whole file.
+ */
 public final class Lexer {
 
     private static final Map<String, TokenType> KEYWORDS = Map.ofEntries(
@@ -43,10 +50,12 @@ public final class Lexer {
         this.source = source;
     }
 
+    /** Diagnostics collected during {@link #scanTokens()} — empty if lexing was clean. */
     public DiagnosticReporter reporter() {
         return reporter;
     }
 
+    /** Scans the whole source and returns its tokens, always ending in a trailing {@code EOF} token. */
     public List<Token> scanTokens() {
         while (!isAtEnd()) {
             start = current;

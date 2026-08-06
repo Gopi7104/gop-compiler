@@ -23,17 +23,22 @@ import com.gopilang.ast.WhileStatement;
 import java.util.ArrayList;
 import java.util.List;
 
-// Deliberately NOT a Visitor on the AST classes themselves — this class is
-// external to the ast package and dispatches with a plain switch over the
-// sealed Stmt/Expr hierarchies, exactly the "sealed + switch instead of
-// Visitor" decision made when the AST was designed. Two responsibilities are
-// kept separate on purpose: describe() knows about GopiLang's AST; render()
-// knows only how to draw a generic labeled tree and could print anything.
+/**
+ * Renders a parsed {@link Program} as a Unicode tree, for the {@code --ast}
+ * CLI mode. Deliberately NOT a Visitor on the AST classes themselves — this
+ * class is external to the {@code ast} package and dispatches with a plain
+ * switch over the sealed {@code Stmt}/{@code Expr} hierarchies, exactly the
+ * "sealed + switch instead of Visitor" decision made when the AST was
+ * designed. Two responsibilities are kept separate on purpose:
+ * {@code describe()} knows about GopiLang's AST; {@code render()} knows
+ * only how to draw a generic labeled tree and could print anything.
+ */
 public final class AstPrinter {
 
     private AstPrinter() {
     }
 
+    /** Renders {@code program}'s full AST as an indented Unicode tree, ending in a trailing newline. */
     public static String print(Program program) {
         TreeNode root = describe(program);
         StringBuilder out = new StringBuilder();

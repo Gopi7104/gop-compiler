@@ -3,12 +3,19 @@ package com.gopilang.errors;
 import com.gopilang.util.SourceLocation;
 import com.gopilang.util.SourceRange;
 
+/**
+ * A single, phase-tagged, user-facing compiler error: the only thing that
+ * crosses phase boundaries (unlike {@link GopiError}, which never leaves
+ * the phase that threw it). Each phase owns its own {@link DiagnosticReporter}.
+ */
 public record Diagnostic(ErrorPhase phase, SourceRange range, String message, String suggestion) {
 
+    /** Converts a caught {@link GopiError} into the phase-crossing {@code Diagnostic} form. */
     public static Diagnostic from(GopiError error) {
         return new Diagnostic(error.phase(), error.range(), error.getMessage(), error.suggestion());
     }
 
+    /** Renders this diagnostic as a human-readable, source-annotated message with a caret under the offending range. */
     public String render(String sourceLine) {
         SourceLocation start = range.start();
         SourceLocation end = range.end();

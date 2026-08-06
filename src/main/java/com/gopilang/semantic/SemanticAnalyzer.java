@@ -33,6 +33,20 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
+/**
+ * Two-pass semantic analyzer producing an immutable {@link SemanticModel}
+ * from a parsed {@link Program}. Pass 1 ({@code registerFunctions()})
+ * registers every function's signature before any body is analyzed, which
+ * is what makes forward references and mutual recursion resolve correctly.
+ * Pass 2 ({@code analyzeFunction}/{@code analyzeStatement}/{@code
+ * analyzeExpr}) walks each body doing scope management, identifier
+ * resolution, type checking, reachability analysis, and definite
+ * assignment — all woven into the same statement-level switch rather than
+ * separate traversals. Never throws and never mutates the AST: an
+ * unresolved or invalid expression simply gets no entry in the resulting
+ * maps, and every downstream check that reads an absent entry silently
+ * skips its own check rather than reporting a cascade.
+ */
 public final class SemanticAnalyzer {
 
     private final Program program;
@@ -67,10 +81,12 @@ public final class SemanticAnalyzer {
         this.program = program;
     }
 
+    /** Diagnostics collected during {@link #analyze()} — empty if analysis found no problems. */
     public DiagnosticReporter reporter() {
         return reporter;
     }
 
+    /** Runs both passes over the program and returns the resulting {@link SemanticModel}. */
     public SemanticModel analyze() {
         registerFunctions();
         for (FunctionDeclaration function : program.functions()) {
@@ -432,12 +448,17 @@ public final class SemanticAnalyzer {
         }
     }
 
-    // Recursive, bottom-up expression typing. Reads variableResolutions,
-    // assignmentTargetResolutions, and callResolutions (all already populated
-    // by analyzeExpr's own resolution walk above) but never writes to them —
-    // this method's only side effect on SemanticModel is populating
-    // expressionTypes. Not yet wired into analyzeStatement/analyze(); that
-    // wiring is statement checking's job, a later step.
+    /**
+     * Recursive, bottom-up expression typing, invoked from many different
+     * statement contexts via {@link #checkExpr(Expr)}. Reads {@code
+     * variableResolutions}, {@code assignmentTargetResolutions}, and {@code
+     * callResolutions} (all already populated by {@code analyzeExpr}'s own
+     * resolution walk) but never writes to them — this method's only side
+     * effect on {@link SemanticModel} is populating {@code expressionTypes}.
+     * Returns empty for an ill-typed or already-poisoned sub-expression,
+     * which is what lets a type error stop propagating rather than
+     * cascading into further diagnostics.
+     */
     public Optional<PrimitiveType> typeOf(Expr expr) {
         return switch (expr) {
             case LiteralExpression literal -> recordType(literal, literal.type());

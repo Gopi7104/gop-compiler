@@ -8,6 +8,16 @@ import com.gopilang.bytecode.Opcode;
 import java.util.ArrayDeque;
 import java.util.Deque;
 
+/**
+ * Stack-machine interpreter for a compiled {@link BytecodeModule}. A plain
+ * fetch-decode-execute loop: read the instruction at {@code pc}, advance
+ * {@code pc}, dispatch on its opcode. {@code pc} indexes the module's one
+ * shared, flat instruction stream spanning every function, so jump/call
+ * targets are always plain instruction indices, never per-function offsets.
+ * Execution begins by running whatever instruction is at index 0 — normally
+ * the entry stub {@code CodeGenerator.generate()} emits ({@code CALL main;
+ * HALT}), which is what pushes the program's first {@link Frame}.
+ */
 public final class VirtualMachine {
 
     private final BytecodeModule module;
@@ -19,6 +29,14 @@ public final class VirtualMachine {
         this.pc = 0;
     }
 
+    /**
+     * Runs {@code module} to completion: executes {@code HALT}, or the last
+     * {@code RETURN} once the call stack empties (the outermost call
+     * returning with no caller left to resume). Assumes {@code module} is
+     * valid bytecode — semantic validation is entirely {@code
+     * SemanticAnalyzer}'s job, performed long before code generation ever
+     * runs.
+     */
     public void run() {
         Frame frame = callStack.peek();
         while (true) {

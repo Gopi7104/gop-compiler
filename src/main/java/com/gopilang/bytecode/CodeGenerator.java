@@ -7,6 +7,7 @@ import com.gopilang.ast.Expr;
 import com.gopilang.ast.ExpressionStatement;
 import com.gopilang.ast.FunctionCallExpression;
 import com.gopilang.ast.FunctionDeclaration;
+import com.gopilang.ast.GroupingExpression;
 import com.gopilang.ast.IfStatement;
 import com.gopilang.ast.LiteralExpression;
 import com.gopilang.ast.Parameter;
@@ -28,6 +29,17 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * Lowers a semantically-valid {@code Program} into a {@code BytecodeModule}.
+ * Builder-style: mutable accumulators (constant pool, function table,
+ * instruction list, slot maps) are filled in while walking the AST, then
+ * assembled into one immutable {@code BytecodeModule} at the end — the same
+ * builder-then-freeze shape {@code SemanticAnalyzer} uses for
+ * {@code SemanticModel}. Never re-validates anything {@code SemanticModel}
+ * already resolved; a missing resolution is treated as an internal
+ * invariant violation ({@code IllegalStateException}), not a user-facing
+ * error, since only an already-valid {@code Program} should ever reach here.
+ */
 public final class CodeGenerator {
 
     private final Program program;
@@ -45,6 +57,11 @@ public final class CodeGenerator {
         this.semanticModel = semanticModel;
     }
 
+    /**
+     * Assigns every function a stable index, emits the two-instruction entry
+     * stub ({@code CALL main; HALT}), compiles each function in declaration
+     * order, and returns the assembled module.
+     */
     public BytecodeModule generate() {
         List<FunctionDeclaration> declarations = program.functions();
         for (int i = 0; i < declarations.size(); i++) {
@@ -83,6 +100,7 @@ public final class CodeGenerator {
                 int index = constantIndex(literal.value());
                 instructions.add(new Instruction(Opcode.PUSH_CONST, index));
             }
+            case GroupingExpression grouping -> compileExpr(grouping.inner());
             case VariableExpression variable -> {
                 VariableSymbol symbol = semanticModel.variableResolutions().get(variable);
                 if (symbol == null) {

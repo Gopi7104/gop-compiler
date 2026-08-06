@@ -6,11 +6,19 @@ import com.gopilang.types.PrimitiveType;
 
 import java.util.Optional;
 
+/**
+ * The type-compatibility table: pure static functions with zero dependency
+ * on {@code Scope}, {@code SemanticModel}, or the AST node hierarchy — only
+ * {@code PrimitiveType}/{@code BinaryOperator}/{@code UnaryOperator}.
+ * Deliberately separate from {@code SemanticAnalyzer} for independent
+ * testability.
+ */
 public final class TypeRules {
 
     private TypeRules() {
     }
 
+    /** Whether a value of type {@code from} may be used where {@code to} is expected (equal types, or {@code int} widening to {@code float}). */
     public static boolean isAssignable(PrimitiveType from, PrimitiveType to) {
         if (from == to) {
             return from != PrimitiveType.VOID;
@@ -18,14 +26,17 @@ public final class TypeRules {
         return from == PrimitiveType.INT && to == PrimitiveType.FLOAT;
     }
 
+    /** Whether a {@code return} value's type is compatible with the function's declared return type. */
     public static boolean isReturnCompatible(PrimitiveType valueType, PrimitiveType declaredReturnType) {
         return isAssignable(valueType, declaredReturnType);
     }
 
+    /** Whether a call argument's type is compatible with the corresponding parameter's declared type. */
     public static boolean isArgumentCompatible(PrimitiveType argumentType, PrimitiveType parameterType) {
         return isAssignable(argumentType, parameterType);
     }
 
+    /** The result type of applying {@code operator} to {@code operand}, or empty if the combination is not legal. */
     public static Optional<PrimitiveType> resultOfUnary(UnaryOperator operator, PrimitiveType operand) {
         return switch (operator) {
             case NEGATE -> isNumeric(operand) ? Optional.of(operand) : Optional.empty();
@@ -33,6 +44,7 @@ public final class TypeRules {
         };
     }
 
+    /** The result type of {@code left operator right}, or empty if the combination is not legal. */
     public static Optional<PrimitiveType> resultOfBinary(
             PrimitiveType left, BinaryOperator operator, PrimitiveType right) {
         return switch (operator) {
@@ -45,6 +57,7 @@ public final class TypeRules {
         };
     }
 
+    /** Whether {@code print(...)} accepts a value of this type (every primitive except {@code void}). */
     public static boolean isPrintable(PrimitiveType type) {
         return switch (type) {
             case INT, FLOAT, BOOL, STRING -> true;

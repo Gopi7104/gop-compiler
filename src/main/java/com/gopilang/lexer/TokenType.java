@@ -1,5 +1,6 @@
 package com.gopilang.lexer;
 
+/** Every kind of token the lexer can produce, grouped by category. */
 public enum TokenType {
 
     // Literals

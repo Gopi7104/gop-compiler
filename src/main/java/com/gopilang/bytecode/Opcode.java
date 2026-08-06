@@ -1,5 +1,11 @@
 package com.gopilang.bytecode;
 
+/**
+ * The GopiLang VM's instruction set: a deliberately small, uniform set of
+ * stack-machine opcodes (constants, locals, arithmetic, comparison, control
+ * flow, function calls, stack manipulation, and termination) — no per-type
+ * variants, no object model, unlike the much larger JVM instruction set.
+ */
 public enum Opcode {
 
     // Constants

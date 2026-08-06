@@ -4,6 +4,7 @@ import com.gopilang.util.SourceRange;
 
 import java.util.Optional;
 
+/** An {@code if (condition) thenBranch [else elseBranch]} statement; {@code else} always attaches to the nearest {@code if}. */
 public record IfStatement(
         Expr condition,
         Stmt thenBranch,

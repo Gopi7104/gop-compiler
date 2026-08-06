@@ -33,6 +33,12 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
+/**
+ * Hand-written recursive-descent parser producing a {@link Program} AST from
+ * a token stream. Recovers from a broken statement via panic-mode
+ * ({@link #synchronize(boolean)}, catching its own {@link ParseError}) so one
+ * syntax error yields one diagnostic rather than a cascade.
+ */
 public final class Parser {
 
     private final List<Token> tokens;
@@ -43,10 +49,12 @@ public final class Parser {
         this.tokens = tokens;
     }
 
+    /** Diagnostics collected during {@link #parseProgram()} — empty if parsing was clean. */
     public DiagnosticReporter reporter() {
         return reporter;
     }
 
+    /** Parses the whole token stream into a {@link Program} (a list of function declarations). */
     public Program parseProgram() {
         SourceLocation start = peek().location();
         List<FunctionDeclaration> functions = new ArrayList<>();
