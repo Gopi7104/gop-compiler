@@ -376,4 +376,107 @@ class SemanticAnalyzerTest {
             assertNoDiagnostics("none main() { }");
         }
     }
+
+    // Arrays (v2 Milestone 1): typeOf's new NewArrayExpression/
+    // ArrayAccessExpression/ArrayLengthExpression/IndexAssignmentExpression
+    // cases, plus the array-rejection guard added to the existing
+    // BinaryExpression/UnaryExpression/isPrintable checks. Every diagnostic
+    // message here was verified against the real analyzer first.
+    @Nested
+    class Arrays {
+
+        @Test
+        void creationIndexingAssignmentAndLengthAllTypeCheck() {
+            assertNoDiagnostics("""
+                    none main() {
+                        num[] a = new num[5];
+                        a[0] = 1;
+                        num x = a[0];
+                        num n = a.len();
+                    }
+                    """);
+        }
+
+        @Test
+        void arrayIsAValidParameterAndReturnType() {
+            assertNoDiagnostics("""
+                    num[] identity(num[] a) { give a; }
+                    none main() {
+                        num[] a = new num[3];
+                        num[] b = identity(a);
+                    }
+                    """);
+        }
+
+        @Test
+        void indexingANonArrayIsRejected() {
+            Diagnostic d = assertSingleDiagnostic(
+                    "none main() { num x = 5; show(x[0]); }", ErrorPhase.TYPE);
+            assertTrue(d.message().contains("cannot index into non-array type"));
+        }
+
+        @Test
+        void nonNumIndexIsRejected() {
+            Diagnostic d = assertSingleDiagnostic(
+                    "none main() { num[] a = new num[3]; show(a[\"oops\"]); }", ErrorPhase.TYPE);
+            assertTrue(d.message().contains("array index must be 'INT'"));
+        }
+
+        @Test
+        void dotLenOnNonArrayIsRejected() {
+            Diagnostic d = assertSingleDiagnostic(
+                    "none main() { num x = 5; show(x.len()); }", ErrorPhase.TYPE);
+            assertTrue(d.message().contains("'.len()' can only be called on an array"));
+        }
+
+        @Test
+        void assigningWrongElementTypeIsRejected() {
+            Diagnostic d = assertSingleDiagnostic(
+                    "none main() { num[] a = new num[3]; a[0] = \"hello\"; }", ErrorPhase.TYPE);
+            assertTrue(d.message().contains("cannot assign 'STRING' to array element of type 'INT'"));
+        }
+
+        @Test
+        void arrayAssignmentRequiresExactElementTypeNoWidening() {
+            Diagnostic d = assertSingleDiagnostic(
+                    "none main() { dec[] a = new num[3]; }", ErrorPhase.TYPE);
+            assertTrue(d.message().contains("cannot assign 'INT[]' to variable of type 'FLOAT[]'"));
+        }
+
+        @Test
+        void arrayOfNoneIsRejected() {
+            Diagnostic d = assertSingleDiagnostic("none main() { none[] a = new none[3]; }", ErrorPhase.TYPE);
+            assertTrue(d.message().contains("array element type cannot be 'none'"));
+        }
+
+        @Test
+        void arithmeticOnArraysIsRejected() {
+            Diagnostic d = assertSingleDiagnostic(
+                    "none main() { num[] a = new num[3]; num[] b = new num[3]; show(a + b); }", ErrorPhase.TYPE);
+            assertTrue(d.message().contains("cannot be applied to 'INT[]' and 'INT[]'"));
+        }
+
+        @Test
+        void printingAnArrayDirectlyIsRejected() {
+            Diagnostic d = assertSingleDiagnostic(
+                    "none main() { num[] a = new num[3]; show(a); }", ErrorPhase.TYPE);
+            assertTrue(d.message().contains("cannot print a value of type 'INT[]'"));
+        }
+
+        @Test
+        void arraysOfEveryElementTypeTypeCheck() {
+            assertNoDiagnostics("""
+                    none main() {
+                        num[] nums = new num[1];
+                        dec[] decs = new dec[1];
+                        flag[] flags = new flag[1];
+                        text[] texts = new text[1];
+                        nums[0] = 1;
+                        decs[0] = 1.5;
+                        flags[0] = yes;
+                        texts[0] = "hi";
+                    }
+                    """);
+        }
+    }
 }

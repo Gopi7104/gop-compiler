@@ -118,6 +118,26 @@ public final class VirtualMachine {
                     }
                     pc = returning.returnAddress();
                 }
+                case NEW_ARRAY -> {
+                    int size = (Integer) frame.operandStack().pop();
+                    frame.operandStack().push(new Object[size]);
+                }
+                case ARRAY_GET -> {
+                    int index = (Integer) frame.operandStack().pop();
+                    Object[] array = (Object[]) frame.operandStack().pop();
+                    frame.operandStack().push(array[index]);
+                }
+                case ARRAY_SET -> {
+                    Object value = frame.operandStack().pop();
+                    int index = (Integer) frame.operandStack().pop();
+                    Object[] array = (Object[]) frame.operandStack().pop();
+                    array[index] = value;
+                    frame.operandStack().push(value);
+                }
+                case ARRAY_LENGTH -> {
+                    Object[] array = (Object[]) frame.operandStack().pop();
+                    frame.operandStack().push(array.length);
+                }
                 case HALT -> {
                     return;
                 }

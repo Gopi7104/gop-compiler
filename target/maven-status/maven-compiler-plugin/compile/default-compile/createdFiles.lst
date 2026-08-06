@@ -17,11 +17,13 @@ com/gopilang/ast/LiteralExpression.class
 com/gopilang/bytecode/BytecodeModule.class
 com/gopilang/errors/package-info.class
 com/gopilang/bytecode/CodeGenerator.class
+com/gopilang/ast/IndexAssignmentExpression.class
 com/gopilang/ast/Program.class
 com/gopilang/printer/AstPrinter.class
 com/gopilang/semantic/TypeRules.class
 com/gopilang/bytecode/Opcode.class
 com/gopilang/errors/GopiError.class
+com/gopilang/types/TypeRef.class
 com/gopilang/ast/UnaryOperator.class
 com/gopilang/errors/ErrorPhase.class
 com/gopilang/printer/package-info.class
@@ -34,7 +36,9 @@ com/gopilang/cli/GopiC.class
 com/gopilang/ast/ASTNode.class
 com/gopilang/semantic/FunctionSymbol.class
 com/gopilang/ast/IfStatement.class
+com/gopilang/ast/ArrayLengthExpression.class
 com/gopilang/vm/VirtualMachine.class
+com/gopilang/ast/ArrayAccessExpression.class
 com/gopilang/lexer/package-info.class
 com/gopilang/ast/BlockStatement.class
 com/gopilang/ast/PrintStatement.class
@@ -67,3 +71,4 @@ com/gopilang/ast/FunctionCallExpression.class
 com/gopilang/errors/Diagnostic.class
 com/gopilang/semantic/SemanticAnalyzer.class
 com/gopilang/semantic/SemanticModel.class
+com/gopilang/ast/NewArrayExpression.class

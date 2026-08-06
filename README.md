@@ -26,11 +26,11 @@ $ ./gopic examples/factorial.gopi
 
 - **Hand-written recursive-descent lexer and parser** — no generated code anywhere in the pipeline.
 - **Static semantic analysis**: scope-aware identifier resolution, type checking, reachability analysis, and definite-assignment checking, all before a single instruction is generated.
-- **A real bytecode compiler** targeting a small, uniform stack-machine instruction set (see [`Opcode`](src/main/java/com/gopilang/bytecode/Opcode.java) — 34 opcodes, fixed `(opcode, operand)` instruction shape, no variable-length encoding).
+- **A real bytecode compiler** targeting a small, uniform stack-machine instruction set (see [`Opcode`](src/main/java/com/gopilang/bytecode/Opcode.java) — 38 opcodes, fixed `(opcode, operand)` instruction shape, no variable-length encoding).
 - **A stack-based virtual machine** with call frames, a shared instruction stream, and full function-call/recursion support.
 - **Rich diagnostics** with source-line rendering and caret underlines for lexical, syntax, and semantic errors.
 - **A disassembler** for inspecting exactly what the compiler generated, without needing to run it.
-- **Language features**: static types (`num`, `dec`, `flag`, `text`, `none`), variables, arithmetic and comparison operators, `if`/`else`, `loop`, user-defined functions, recursion, and `show`.
+- **Language features**: static types (`num`, `dec`, `flag`, `text`, `none`), arrays of any non-`none` type, variables, arithmetic and comparison operators, `if`/`else`, `loop`, user-defined functions, recursion, and `show`.
 
 Known gap (tracked, not hidden): `&&`/`||` parse and type-check correctly but are not yet compiled to bytecode — see [Future Roadmap](#future-roadmap).
 

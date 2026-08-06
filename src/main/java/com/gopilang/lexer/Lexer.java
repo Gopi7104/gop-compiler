@@ -30,6 +30,7 @@ public final class Lexer {
             Map.entry("loop", TokenType.KW_WHILE),
             Map.entry("give", TokenType.KW_RETURN),
             Map.entry("show", TokenType.KW_PRINT),
+            Map.entry("new", TokenType.KW_NEW),
             Map.entry("yes", TokenType.BOOLEAN_LITERAL),
             Map.entry("no", TokenType.BOOLEAN_LITERAL)
     );
@@ -82,8 +83,11 @@ public final class Lexer {
             case ')' -> addToken(TokenType.RIGHT_PAREN);
             case '{' -> addToken(TokenType.LEFT_BRACE);
             case '}' -> addToken(TokenType.RIGHT_BRACE);
+            case '[' -> addToken(TokenType.LEFT_BRACKET);
+            case ']' -> addToken(TokenType.RIGHT_BRACKET);
             case ';' -> addToken(TokenType.SEMICOLON);
             case ',' -> addToken(TokenType.COMMA);
+            case '.' -> addToken(TokenType.DOT);
 
             case '+' -> addToken(TokenType.PLUS);
             case '-' -> addToken(TokenType.MINUS);

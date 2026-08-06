@@ -1,6 +1,6 @@
 package com.gopilang.semantic;
 
-import com.gopilang.types.PrimitiveType;
+import com.gopilang.types.TypeRef;
 import com.gopilang.util.SourceRange;
 
 /**
@@ -9,5 +9,5 @@ import com.gopilang.util.SourceRange;
  * why {@code SemanticModel}'s node-keyed resolution maps must use identity
  * semantics rather than {@code VariableSymbol} equality.
  */
-public record VariableSymbol(String name, PrimitiveType type, SourceRange declaredAt) {
+public record VariableSymbol(String name, TypeRef type, SourceRange declaredAt) {
 }

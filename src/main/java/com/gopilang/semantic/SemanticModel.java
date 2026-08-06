@@ -4,7 +4,7 @@ import com.gopilang.ast.AssignmentExpression;
 import com.gopilang.ast.Expr;
 import com.gopilang.ast.FunctionCallExpression;
 import com.gopilang.ast.VariableExpression;
-import com.gopilang.types.PrimitiveType;
+import com.gopilang.types.TypeRef;
 
 import java.util.Collections;
 import java.util.IdentityHashMap;
@@ -21,7 +21,7 @@ public record SemanticModel(
         Map<VariableExpression, VariableSymbol> variableResolutions,
         Map<AssignmentExpression, VariableSymbol> assignmentTargetResolutions,
         Map<FunctionCallExpression, FunctionSymbol> callResolutions,
-        Map<Expr, PrimitiveType> expressionTypes
+        Map<Expr, TypeRef> expressionTypes
 ) {
     /**
      * Defensively copies all five maps. {@code functionTable} is name-keyed

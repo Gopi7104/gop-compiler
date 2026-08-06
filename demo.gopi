@@ -1,7 +1,7 @@
-num add(num a, num b) {
-    give a + b;
-}
-
 none main() {
-    show(add(5, 10));
+
+    num[] a = new num[5];
+
+    a[0] = "Hello";
+
 }

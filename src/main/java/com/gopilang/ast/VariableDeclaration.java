@@ -1,6 +1,6 @@
 package com.gopilang.ast;
 
-import com.gopilang.types.PrimitiveType;
+import com.gopilang.types.TypeRef;
 import com.gopilang.util.SourceRange;
 
 import java.util.Optional;
@@ -12,7 +12,7 @@ import java.util.Optional;
  * read before assignment as an error.
  */
 public record VariableDeclaration(
-        PrimitiveType type,
+        TypeRef type,
         String name,
         Optional<Expr> initializer,
         SourceRange range

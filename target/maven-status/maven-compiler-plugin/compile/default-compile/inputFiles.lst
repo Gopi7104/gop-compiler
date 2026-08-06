@@ -1,4 +1,6 @@
 /Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/ast/ASTNode.java
+/Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/ast/ArrayAccessExpression.java
+/Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/ast/ArrayLengthExpression.java
 /Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/ast/AssignmentExpression.java
 /Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/ast/BinaryExpression.java
 /Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/ast/BinaryOperator.java
@@ -9,7 +11,9 @@
 /Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/ast/FunctionDeclaration.java
 /Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/ast/GroupingExpression.java
 /Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/ast/IfStatement.java
+/Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/ast/IndexAssignmentExpression.java
 /Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/ast/LiteralExpression.java
+/Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/ast/NewArrayExpression.java
 /Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/ast/Parameter.java
 /Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/ast/PrintStatement.java
 /Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/ast/Program.java
@@ -53,6 +57,7 @@
 /Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/semantic/VariableSymbol.java
 /Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/semantic/package-info.java
 /Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/types/PrimitiveType.java
+/Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/types/TypeRef.java
 /Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/types/package-info.java
 /Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/util/SourceLocation.java
 /Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/util/SourceRange.java

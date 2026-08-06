@@ -1,6 +1,6 @@
 package com.gopilang.ast;
 
-import com.gopilang.types.PrimitiveType;
+import com.gopilang.types.TypeRef;
 import com.gopilang.util.SourceRange;
 
 import java.util.List;
@@ -11,7 +11,7 @@ import java.util.List;
  * {@code Program.functions()}.
  */
 public record FunctionDeclaration(
-        PrimitiveType returnType,
+        TypeRef returnType,
         String name,
         List<Parameter> parameters,
         BlockStatement body,

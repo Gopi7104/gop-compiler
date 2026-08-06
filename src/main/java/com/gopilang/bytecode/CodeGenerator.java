@@ -1,5 +1,7 @@
 package com.gopilang.bytecode;
 
+import com.gopilang.ast.ArrayAccessExpression;
+import com.gopilang.ast.ArrayLengthExpression;
 import com.gopilang.ast.AssignmentExpression;
 import com.gopilang.ast.BinaryExpression;
 import com.gopilang.ast.BlockStatement;
@@ -9,7 +11,9 @@ import com.gopilang.ast.FunctionCallExpression;
 import com.gopilang.ast.FunctionDeclaration;
 import com.gopilang.ast.GroupingExpression;
 import com.gopilang.ast.IfStatement;
+import com.gopilang.ast.IndexAssignmentExpression;
 import com.gopilang.ast.LiteralExpression;
+import com.gopilang.ast.NewArrayExpression;
 import com.gopilang.ast.Parameter;
 import com.gopilang.ast.PrintStatement;
 import com.gopilang.ast.Program;
@@ -23,6 +27,7 @@ import com.gopilang.semantic.FunctionSymbol;
 import com.gopilang.semantic.SemanticModel;
 import com.gopilang.semantic.VariableSymbol;
 import com.gopilang.types.PrimitiveType;
+import com.gopilang.types.TypeRef;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -124,7 +129,7 @@ public final class CodeGenerator {
                 compileExpr(binary.left());
                 compileExpr(binary.right());
                 Opcode opcode = switch (binary.operator()) {
-                    case ADD -> semanticModel.expressionTypes().get(binary) == PrimitiveType.STRING
+                    case ADD -> semanticModel.expressionTypes().get(binary).elementType() == PrimitiveType.STRING
                             ? Opcode.CONCAT
                             : Opcode.ADD;
                     case SUBTRACT -> Opcode.SUB;
@@ -171,6 +176,28 @@ public final class CodeGenerator {
                 }
                 instructions.add(new Instruction(Opcode.CALL, functionIndex));
             }
+            case NewArrayExpression newArray -> {
+                compileExpr(newArray.size());
+                instructions.add(new Instruction(Opcode.NEW_ARRAY, 0));
+            }
+            case ArrayAccessExpression access -> {
+                compileExpr(access.array());
+                compileExpr(access.index());
+                instructions.add(new Instruction(Opcode.ARRAY_GET, 0));
+            }
+            case ArrayLengthExpression length -> {
+                compileExpr(length.array());
+                instructions.add(new Instruction(Opcode.ARRAY_LENGTH, 0));
+            }
+            case IndexAssignmentExpression indexAssignment -> {
+                compileExpr(indexAssignment.array());
+                compileExpr(indexAssignment.index());
+                compileExpr(indexAssignment.value());
+                // ARRAY_SET pushes the stored value back itself (unlike plain
+                // STORE), so no DUP is needed here — a single 3-argument
+                // opcode can't be split by DUP the way a 1-slot STORE can.
+                instructions.add(new Instruction(Opcode.ARRAY_SET, 0));
+            }
             default -> throw new UnsupportedOperationException(
                     "compileExpr not yet implemented for " + expr.getClass().getSimpleName());
         }
@@ -200,11 +227,11 @@ public final class CodeGenerator {
             }
             case ExpressionStatement exprStmt -> {
                 compileExpr(exprStmt.expression());
-                PrimitiveType type = semanticModel.expressionTypes().get(exprStmt.expression());
+                TypeRef type = semanticModel.expressionTypes().get(exprStmt.expression());
                 if (type == null) {
                     throw new IllegalStateException("Untyped ExpressionStatement expression");
                 }
-                if (type != PrimitiveType.VOID) {
+                if (type.elementType() != PrimitiveType.VOID) {
                     instructions.add(new Instruction(Opcode.POP, 0));
                 }
             }

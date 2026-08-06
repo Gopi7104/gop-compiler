@@ -1,5 +1,7 @@
 package com.gopilang.parser;
 
+import com.gopilang.ast.ArrayAccessExpression;
+import com.gopilang.ast.ArrayLengthExpression;
 import com.gopilang.ast.AssignmentExpression;
 import com.gopilang.ast.BinaryExpression;
 import com.gopilang.ast.BinaryOperator;
@@ -10,7 +12,9 @@ import com.gopilang.ast.FunctionCallExpression;
 import com.gopilang.ast.FunctionDeclaration;
 import com.gopilang.ast.GroupingExpression;
 import com.gopilang.ast.IfStatement;
+import com.gopilang.ast.IndexAssignmentExpression;
 import com.gopilang.ast.LiteralExpression;
+import com.gopilang.ast.NewArrayExpression;
 import com.gopilang.ast.Parameter;
 import com.gopilang.ast.PrintStatement;
 import com.gopilang.ast.Program;
@@ -26,6 +30,7 @@ import com.gopilang.errors.DiagnosticReporter;
 import com.gopilang.lexer.Token;
 import com.gopilang.lexer.TokenType;
 import com.gopilang.types.PrimitiveType;
+import com.gopilang.types.TypeRef;
 import com.gopilang.util.SourceLocation;
 import com.gopilang.util.SourceRange;
 
@@ -75,7 +80,7 @@ public final class Parser {
 
     private FunctionDeclaration parseFunction() {
         SourceLocation start = peek().location();
-        PrimitiveType returnType = parseType();
+        TypeRef returnType = parseType();
         Token name = consume(TokenType.IDENTIFIER, "expected a function name");
         consume(TokenType.LEFT_PAREN, "expected '(' after function name");
         List<Parameter> parameters = parseParameters();
@@ -90,7 +95,7 @@ public final class Parser {
         if (!check(TokenType.RIGHT_PAREN)) {
             do {
                 SourceLocation paramStart = peek().location();
-                PrimitiveType type = parseType();
+                TypeRef type = parseType();
                 Token name = consume(TokenType.IDENTIFIER, "expected a parameter name");
                 parameters.add(new Parameter(type, name.lexeme(), new SourceRange(paramStart, name.location())));
             } while (match(TokenType.COMMA));
@@ -98,7 +103,19 @@ public final class Parser {
         return parameters;
     }
 
-    private PrimitiveType parseType() {
+    // type ::= elementType ( "[" "]" )? — the bracket pair marks "array of
+    // elementType"; it is a fixed, empty pair here (the SIZE only appears
+    // later, at array-creation time via "new elementType[size]").
+    private TypeRef parseType() {
+        PrimitiveType elementType = parseElementType();
+        if (match(TokenType.LEFT_BRACKET)) {
+            consume(TokenType.RIGHT_BRACKET, "expected ']' after '[' in array type");
+            return new TypeRef(elementType, true);
+        }
+        return new TypeRef(elementType, false);
+    }
+
+    private PrimitiveType parseElementType() {
         if (match(TokenType.KW_INT)) return PrimitiveType.INT;
         if (match(TokenType.KW_FLOAT)) return PrimitiveType.FLOAT;
         if (match(TokenType.KW_BOOL)) return PrimitiveType.BOOL;
@@ -139,7 +156,7 @@ public final class Parser {
 
     private VariableDeclaration parseVariableDeclaration() {
         SourceLocation start = peek().location();
-        PrimitiveType type = parseType();
+        TypeRef type = parseType();
         Token name = consume(TokenType.IDENTIFIER, "expected a variable name");
         Optional<Expr> initializer = Optional.empty();
         if (match(TokenType.ASSIGN)) {
@@ -207,14 +224,25 @@ public final class Parser {
         return parseAssignment();
     }
 
+    // Parses the left side generically, then checks for a trailing '=' —
+    // needed now that an lvalue can be more than a bare identifier
+    // (array[index] = ... is also valid). Right-associative: the value side
+    // recurses back into parseAssignment(), which is what makes chained
+    // assignment (a = b = 5, or a[i] = b[j] = 5) work with no special case.
     private Expr parseAssignment() {
-        if (check(TokenType.IDENTIFIER) && peekNext().type() == TokenType.ASSIGN) {
-            Token name = advance();  // the identifier
-            advance();               // the '='
+        Expr expr = parseLogicalOr();
+        if (match(TokenType.ASSIGN)) {
             Expr value = parseAssignment();
-            return new AssignmentExpression(name.lexeme(), value, new SourceRange(name.location(), value.range().end()));
+            SourceRange range = new SourceRange(expr.range().start(), value.range().end());
+            if (expr instanceof VariableExpression variable) {
+                return new AssignmentExpression(variable.name(), value, range);
+            }
+            if (expr instanceof ArrayAccessExpression access) {
+                return new IndexAssignmentExpression(access.array(), access.index(), value, range);
+            }
+            throw new ParseError("invalid assignment target", expr.range());
         }
-        return parseLogicalOr();
+        return expr;
     }
 
     private Expr parseLogicalOr() {
@@ -310,10 +338,13 @@ public final class Parser {
         return parseCall();
     }
 
-    // call ::= primary [ "(" [ argList ] ")" ] — not in the originally listed
-    // ten methods, but required for FunctionCallExpression (one of the seven
-    // frozen Expr nodes) to ever be constructible; restored from Milestone 3's
-    // original grammar between parseUnary() and parsePrimary().
+    // call ::= primary ( "(" argList? ")" | "[" expression "]" | "." "len" "(" ")" )?
+    // — not in the originally listed ten methods, but required for
+    // FunctionCallExpression (one of the frozen Expr nodes) to ever be
+    // constructible; restored from Milestone 3's original grammar between
+    // parseUnary() and parsePrimary(). Indexing and '.len()' were added
+    // alongside it, at most one suffix, same as calls — matching the
+    // existing (non-chaining) limitation rather than lifting it.
     private Expr parseCall() {
         Expr expr = parsePrimary();
         if (match(TokenType.LEFT_PAREN)) {
@@ -330,10 +361,32 @@ public final class Parser {
             return new FunctionCallExpression(callee.name(), arguments,
                     new SourceRange(callee.range().start(), closing.location()));
         }
+        if (match(TokenType.LEFT_BRACKET)) {
+            Expr index = parseExpression();
+            Token closing = consume(TokenType.RIGHT_BRACKET, "expected ']' after array index");
+            return new ArrayAccessExpression(expr, index, new SourceRange(expr.range().start(), closing.location()));
+        }
+        if (match(TokenType.DOT)) {
+            if (!check(TokenType.IDENTIFIER) || !peek().lexeme().equals("len")) {
+                throw new ParseError(describeMismatch("expected 'len' after '.'"), SourceRange.point(peek().location()));
+            }
+            advance(); // consume 'len'
+            consume(TokenType.LEFT_PAREN, "expected '(' after 'len'");
+            Token closing = consume(TokenType.RIGHT_PAREN, "expected ')' after 'len('");
+            return new ArrayLengthExpression(expr, new SourceRange(expr.range().start(), closing.location()));
+        }
         return expr;
     }
 
     private Expr parsePrimary() {
+        if (match(TokenType.KW_NEW)) {
+            SourceLocation start = previous().location();
+            PrimitiveType elementType = parseElementType();
+            consume(TokenType.LEFT_BRACKET, "expected '[' after array element type");
+            Expr size = parseExpression();
+            Token closing = consume(TokenType.RIGHT_BRACKET, "expected ']' after array size");
+            return new NewArrayExpression(elementType, size, new SourceRange(start, closing.location()));
+        }
         if (match(TokenType.INT_LITERAL, TokenType.FLOAT_LITERAL, TokenType.STRING_LITERAL,
                 TokenType.BOOLEAN_LITERAL)) {
             Token literal = previous();
@@ -365,14 +418,6 @@ public final class Parser {
 
     private Token peek() {
         return tokens.get(current);
-    }
-
-    // Two-token lookahead, needed only by parseAssignment()'s IDENTIFIER "="
-    // check. Safe at end-of-stream: EOF is always the last token, so once
-    // current sits on it there is nothing meaningful "next" — returning EOF
-    // again is the correct, bounds-safe answer.
-    private Token peekNext() {
-        return (current + 1 < tokens.size()) ? tokens.get(current + 1) : tokens.get(tokens.size() - 1);
     }
 
     private Token previous() {

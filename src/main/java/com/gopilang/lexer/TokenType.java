@@ -25,6 +25,7 @@ public enum TokenType {
     KW_WHILE,
     KW_RETURN,
     KW_PRINT,
+    KW_NEW,
 
     // Operators: arithmetic
     PLUS,
@@ -52,12 +53,15 @@ public enum TokenType {
     // Separators
     SEMICOLON,
     COMMA,
+    DOT,
 
     // Grouping
     LEFT_PAREN,
     RIGHT_PAREN,
     LEFT_BRACE,
     RIGHT_BRACE,
+    LEFT_BRACKET,
+    RIGHT_BRACKET,
 
     // Sentinel
     EOF

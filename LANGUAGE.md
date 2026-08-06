@@ -29,6 +29,67 @@ There is no implicit narrowing: a `num` value can be used where a `dec` is expec
 
 String literals support the escape sequences `\n`, `\t`, `\"`, and `\\`. Strings cannot span multiple lines.
 
+## Arrays
+
+Any type except `none` can be made into an array type by appending `[]`:
+
+```
+num[] numbers;
+text[] names;
+flag[] values;
+```
+
+An array is created with `new elementType[size]`, where `size` is any `num`-typed expression (not necessarily a literal):
+
+```
+num[] numbers = new num[5];
+num n = 5;
+text[] names = new text[n];
+```
+
+Elements are read and written with `[index]`, where `index` must be `num`:
+
+```
+numbers[0] = 10;
+num first = numbers[0];
+```
+
+Indexed assignment is itself an expression (like plain variable assignment), so it can be chained or nested:
+
+```
+numbers[0] = numbers[1] = 5;   // both become 5
+```
+
+An array's length is read with `.len()`:
+
+```
+show(numbers.len());
+```
+
+Arrays can be passed to and returned from functions like any other type:
+
+```
+num sum(num[] values) {
+    num total = 0;
+    num i = 0;
+    loop (i < values.len()) {
+        total = total + values[i];
+        i = i + 1;
+    }
+    give total;
+}
+```
+
+Assigning one array-typed value to another requires an **exact** type match — there is no `num[]`-to-`dec[]` widening the way there is for plain `num`-to-`dec`:
+
+```
+dec[] a = new num[3];   // compile-time error: cannot assign 'INT[]' to variable of type 'FLOAT[]'
+```
+
+Arithmetic and comparison operators do not accept array operands (`a + b` where `a`/`b` are arrays is a compile-time error), and an array cannot be passed directly to `show(...)` — only its elements or its `.len()`.
+
+There is no array-literal syntax (e.g. `[1, 2, 3]`) — every array is created with `new`, then filled in by assignment.
+
 ## Variables
 
 Declared with an explicit type, optionally with an initializer:
@@ -150,7 +211,8 @@ program        ::= functionDecl* EOF
 functionDecl   ::= type IDENTIFIER "(" parameters? ")" block
 parameters     ::= parameter ("," parameter)*
 parameter      ::= type IDENTIFIER
-type           ::= "num" | "dec" | "flag" | "text" | "none"
+type           ::= elementType ( "[" "]" )?
+elementType    ::= "num" | "dec" | "flag" | "text" | "none"
 
 block          ::= "{" statement* "}"
 statement      ::= variableDecl | ifStmt | whileStmt | returnStmt
@@ -164,7 +226,8 @@ printStmt      ::= "show" "(" expression ")" ";"
 exprStmt       ::= expression ";"
 
 expression     ::= assignment
-assignment     ::= (IDENTIFIER "=" assignment) | logicalOr
+assignment     ::= (assignmentTarget "=" assignment) | logicalOr
+assignmentTarget ::= IDENTIFIER | IDENTIFIER "[" expression "]"
 logicalOr      ::= logicalAnd ("||" logicalAnd)*
 logicalAnd     ::= equality ("&&" equality)*
 equality       ::= comparison (("==" | "!=") comparison)*
@@ -172,8 +235,10 @@ comparison     ::= term (("<" | ">" | "<=" | ">=") term)*
 term           ::= factor (("+" | "-") factor)*
 factor         ::= unary (("*" | "/" | "%") unary)*
 unary          ::= ("!" | "-") unary | call
-call           ::= primary ("(" arguments? ")")?
+call           ::= primary ( "(" arguments? ")" | "[" expression "]" | "." "len" "(" ")" )?
 arguments      ::= expression ("," expression)*
 primary        ::= INT_LITERAL | FLOAT_LITERAL | STRING_LITERAL | BOOLEAN_LITERAL
-                  | IDENTIFIER | "(" expression ")"
+                  | IDENTIFIER | "(" expression ")" | "new" elementType "[" expression "]"
 ```
+
+`assignmentTarget` isn't parsed as its own production in practice — `parseAssignment()` parses the left side as an ordinary expression first, then checks whether it turned out to be a plain identifier or an array index before treating the following `=` as an assignment; anything else followed by `=` is a parse error ("invalid assignment target").

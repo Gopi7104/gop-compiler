@@ -1,5 +1,7 @@
 package com.gopilang.printer;
 
+import com.gopilang.ast.ArrayAccessExpression;
+import com.gopilang.ast.ArrayLengthExpression;
 import com.gopilang.ast.AssignmentExpression;
 import com.gopilang.ast.BinaryExpression;
 import com.gopilang.ast.BlockStatement;
@@ -9,7 +11,9 @@ import com.gopilang.ast.FunctionCallExpression;
 import com.gopilang.ast.FunctionDeclaration;
 import com.gopilang.ast.GroupingExpression;
 import com.gopilang.ast.IfStatement;
+import com.gopilang.ast.IndexAssignmentExpression;
 import com.gopilang.ast.LiteralExpression;
+import com.gopilang.ast.NewArrayExpression;
 import com.gopilang.ast.Parameter;
 import com.gopilang.ast.PrintStatement;
 import com.gopilang.ast.Program;
@@ -143,6 +147,16 @@ public final class AstPrinter {
                         + "(" + call.arguments().size() + " args)";
                 yield new TreeNode(label, children);
             }
+            case NewArrayExpression newArray -> new TreeNode(
+                    "NewArrayExpression " + newArray.elementType() + "[]", List.of(describe(newArray.size())));
+            case ArrayAccessExpression access -> new TreeNode(
+                    "ArrayAccessExpression", List.of(describe(access.array()), describe(access.index())));
+            case ArrayLengthExpression length ->
+                    new TreeNode("ArrayLengthExpression", List.of(describe(length.array())));
+            case IndexAssignmentExpression indexAssignment -> new TreeNode(
+                    "IndexAssignmentExpression",
+                    List.of(describe(indexAssignment.array()), describe(indexAssignment.index()),
+                            describe(indexAssignment.value())));
         };
     }
 }

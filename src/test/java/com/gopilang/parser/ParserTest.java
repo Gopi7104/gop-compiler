@@ -300,6 +300,91 @@ class ParserTest {
         }
     }
 
+    // Arrays (v2 Milestone 1): array-typed declarations/parameters/returns,
+    // creation, indexing, index-assignment, and '.len()' — the array-specific
+    // grammar additions layered on top of the existing type/expression rules
+    // without changing how any pre-existing construct parses.
+    @Nested
+    class Arrays {
+
+        @Test
+        void arrayTypeDeclarationAndCreation() {
+            assertEquals("""
+                    Program
+                    └── FunctionDeclaration main() -> VOID
+                        └── BlockStatement
+                            └── VariableDeclaration INT[] a
+                                └── NewArrayExpression INT[]
+                                    └── LiteralExpression 5 (INT)
+                    """, parseAndPrint("none main() { num[] a = new num[5]; }"));
+        }
+
+        @Test
+        void arrayIndexingReadsAnElement() {
+            assertEquals("""
+                    Program
+                    └── FunctionDeclaration main() -> VOID
+                        └── BlockStatement
+                            └── PrintStatement
+                                └── ArrayAccessExpression
+                                    ├── VariableExpression a
+                                    └── LiteralExpression 0 (INT)
+                    """, parseAndPrint("none main() { show(a[0]); }"));
+        }
+
+        @Test
+        void indexAssignmentIsADistinctNodeFromPlainAssignment() {
+            assertEquals("""
+                    Program
+                    └── FunctionDeclaration main() -> VOID
+                        └── BlockStatement
+                            └── ExpressionStatement
+                                └── IndexAssignmentExpression
+                                    ├── VariableExpression a
+                                    ├── LiteralExpression 0 (INT)
+                                    └── LiteralExpression 5 (INT)
+                    """, parseAndPrint("none main() { a[0] = 5; }"));
+        }
+
+        @Test
+        void dotLenReadsArrayLength() {
+            assertEquals("""
+                    Program
+                    └── FunctionDeclaration main() -> VOID
+                        └── BlockStatement
+                            └── PrintStatement
+                                └── ArrayLengthExpression
+                                    └── VariableExpression a
+                    """, parseAndPrint("none main() { show(a.len()); }"));
+        }
+
+        @Test
+        void arrayTypeIsValidAsParameterAndReturnType() {
+            assertEquals("""
+                    Program
+                    └── FunctionDeclaration f() -> INT[]
+                        ├── Parameter INT[] a
+                        └── BlockStatement
+                            └── ReturnStatement
+                                └── VariableExpression a
+                    """, parseAndPrint("num[] f(num[] a) { give a; }"));
+        }
+
+        @Test
+        void dotSuffixOtherThanLenIsAParseError() {
+            Parser parser = new Parser(new Lexer("none main() { show(a.size()); }").scanTokens());
+            parser.parseProgram();
+            assertTrue(parser.reporter().hasErrors());
+        }
+
+        @Test
+        void assigningToALiteralIsAParseError() {
+            Parser parser = new Parser(new Lexer("none main() { 5 = 6; }").scanTokens());
+            parser.parseProgram();
+            assertTrue(parser.reporter().hasErrors());
+        }
+    }
+
     // Nested blocks matter because they exercise parseBlock() and
     // parseStatement() calling each other recursively — the mutual-recursion
     // structure that made these two methods impossible to compile/test in

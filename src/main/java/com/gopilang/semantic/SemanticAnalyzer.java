@@ -1,5 +1,7 @@
 package com.gopilang.semantic;
 
+import com.gopilang.ast.ArrayAccessExpression;
+import com.gopilang.ast.ArrayLengthExpression;
 import com.gopilang.ast.AssignmentExpression;
 import com.gopilang.ast.BinaryExpression;
 import com.gopilang.ast.BlockStatement;
@@ -9,7 +11,9 @@ import com.gopilang.ast.FunctionCallExpression;
 import com.gopilang.ast.FunctionDeclaration;
 import com.gopilang.ast.GroupingExpression;
 import com.gopilang.ast.IfStatement;
+import com.gopilang.ast.IndexAssignmentExpression;
 import com.gopilang.ast.LiteralExpression;
+import com.gopilang.ast.NewArrayExpression;
 import com.gopilang.ast.Parameter;
 import com.gopilang.ast.PrintStatement;
 import com.gopilang.ast.Program;
@@ -23,6 +27,7 @@ import com.gopilang.errors.Diagnostic;
 import com.gopilang.errors.DiagnosticReporter;
 import com.gopilang.errors.ErrorPhase;
 import com.gopilang.types.PrimitiveType;
+import com.gopilang.types.TypeRef;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -60,7 +65,7 @@ public final class SemanticAnalyzer {
     private final Map<VariableExpression, VariableSymbol> variableResolutions = new IdentityHashMap<>();
     private final Map<AssignmentExpression, VariableSymbol> assignmentTargetResolutions = new IdentityHashMap<>();
     private final Map<FunctionCallExpression, FunctionSymbol> callResolutions = new IdentityHashMap<>();
-    private final Map<Expr, PrimitiveType> expressionTypes = new IdentityHashMap<>();
+    private final Map<Expr, TypeRef> expressionTypes = new IdentityHashMap<>();
 
     // Reassigned while walking: currentScope tracks the active scope chain
     // (entering/leaving a block reassigns this to a child/parent Scope);
@@ -113,7 +118,7 @@ public final class SemanticAnalyzer {
                     "add a 'none main()' function as the program's entry point"));
             return;
         }
-        if (main.returnType() != PrimitiveType.VOID || !main.parameterTypes().isEmpty()) {
+        if (!isVoid(main.returnType()) || !main.parameterTypes().isEmpty()) {
             reporter.report(new Diagnostic(
                     ErrorPhase.SEMANTIC,
                     main.declaredAt(),
@@ -177,7 +182,7 @@ public final class SemanticAnalyzer {
         // needs no information the type-checking walk didn't already use —
         // it's a structural question over the same statement tree, checked
         // once per function, not interleaved with per-statement typing.
-        if (function.returnType() != PrimitiveType.VOID && !returnsOnAllPaths(function.body())) {
+        if (!isVoid(function.returnType()) && !returnsOnAllPaths(function.body())) {
             reporter.report(new Diagnostic(
                     ErrorPhase.TYPE,
                     function.range(),
@@ -217,6 +222,14 @@ public final class SemanticAnalyzer {
                 && Boolean.TRUE.equals(literal.value());
     }
 
+    // "Exactly 'none', not 'none[]'" — VOID can never legally be an array
+    // (typeOf's NewArrayExpression case never produces one), so this is the
+    // one check needed everywhere a declared or expected type must be plain
+    // 'none' (main's return type, a non-array function's implicit void return).
+    private static boolean isVoid(TypeRef type) {
+        return !type.isArray() && type.elementType() == PrimitiveType.VOID;
+    }
+
     private void analyzeStatement(Stmt stmt) {
         switch (stmt) {
             case BlockStatement block -> {
@@ -229,7 +242,7 @@ public final class SemanticAnalyzer {
             }
             case VariableDeclaration decl -> {
                 // Checked before insertion, deliberately — a variable's own
-                // initializer must not be able to see itself (int y = y + 1;
+                // initializer must not be able to see itself (num y = y + 1;
                 // sees an outer y, or is undefined; never "the y being
                 // declared right now").
                 decl.initializer().ifPresent(init -> checkExpr(init).ifPresent(type -> {
@@ -270,7 +283,7 @@ public final class SemanticAnalyzer {
             }
             case IfStatement ifStmt -> {
                 checkExpr(ifStmt.condition()).ifPresent(type -> {
-                    if (type != PrimitiveType.BOOL) {
+                    if (type.isArray() || type.elementType() != PrimitiveType.BOOL) {
                         reporter.report(new Diagnostic(
                                 ErrorPhase.TYPE,
                                 ifStmt.condition().range(),
@@ -304,7 +317,7 @@ public final class SemanticAnalyzer {
             }
             case WhileStatement whileStmt -> {
                 checkExpr(whileStmt.condition()).ifPresent(type -> {
-                    if (type != PrimitiveType.BOOL) {
+                    if (type.isArray() || type.elementType() != PrimitiveType.BOOL) {
                         reporter.report(new Diagnostic(
                                 ErrorPhase.TYPE,
                                 whileStmt.condition().range(),
@@ -324,9 +337,9 @@ public final class SemanticAnalyzer {
                 currentAssigned = beforeLoop;
             }
             case ReturnStatement returnStmt -> {
-                PrimitiveType declaredReturnType = currentFunction.returnType();
+                TypeRef declaredReturnType = currentFunction.returnType();
                 if (returnStmt.value().isEmpty()) {
-                    if (declaredReturnType != PrimitiveType.VOID) {
+                    if (!isVoid(declaredReturnType)) {
                         reporter.report(new Diagnostic(
                                 ErrorPhase.TYPE,
                                 returnStmt.range(),
@@ -335,8 +348,8 @@ public final class SemanticAnalyzer {
                     }
                 } else {
                     Expr value = returnStmt.value().get();
-                    Optional<PrimitiveType> valueType = checkExpr(value);
-                    if (declaredReturnType == PrimitiveType.VOID) {
+                    Optional<TypeRef> valueType = checkExpr(value);
+                    if (isVoid(declaredReturnType)) {
                         reporter.report(new Diagnostic(
                                 ErrorPhase.TYPE,
                                 value.range(),
@@ -374,7 +387,7 @@ public final class SemanticAnalyzer {
     // (typeOf, only READS those maps) — this is the one, explicit place that
     // ordering is enforced, so every statement-level touchpoint gets both by
     // construction instead of having to remember to pair them manually.
-    private Optional<PrimitiveType> checkExpr(Expr expr) {
+    private Optional<TypeRef> checkExpr(Expr expr) {
         analyzeExpr(expr);
         return typeOf(expr);
     }
@@ -445,6 +458,21 @@ public final class SemanticAnalyzer {
                             null));
                 }
             }
+            case NewArrayExpression newArray -> analyzeExpr(newArray.size());
+            case ArrayAccessExpression access -> {
+                analyzeExpr(access.array());
+                analyzeExpr(access.index());
+            }
+            case ArrayLengthExpression length -> analyzeExpr(length.array());
+            case IndexAssignmentExpression indexAssignment -> {
+                // The array reference itself is read here (which array is
+                // being mutated), not reassigned — its own definite-assignment
+                // check happens naturally via analyzeExpr(array)'s ordinary
+                // VariableExpression case, exactly like any other read.
+                analyzeExpr(indexAssignment.array());
+                analyzeExpr(indexAssignment.index());
+                analyzeExpr(indexAssignment.value());
+            }
         }
     }
 
@@ -459,9 +487,9 @@ public final class SemanticAnalyzer {
      * which is what lets a type error stop propagating rather than
      * cascading into further diagnostics.
      */
-    public Optional<PrimitiveType> typeOf(Expr expr) {
+    public Optional<TypeRef> typeOf(Expr expr) {
         return switch (expr) {
-            case LiteralExpression literal -> recordType(literal, literal.type());
+            case LiteralExpression literal -> recordType(literal, new TypeRef(literal.type(), false));
 
             case VariableExpression variable -> {
                 VariableSymbol symbol = variableResolutions.get(variable);
@@ -469,16 +497,25 @@ public final class SemanticAnalyzer {
             }
 
             case GroupingExpression grouping -> {
-                Optional<PrimitiveType> innerType = typeOf(grouping.inner());
+                Optional<TypeRef> innerType = typeOf(grouping.inner());
                 yield innerType.isEmpty() ? Optional.empty() : recordType(grouping, innerType.get());
             }
 
             case UnaryExpression unary -> {
-                Optional<PrimitiveType> operandType = typeOf(unary.operand());
+                Optional<TypeRef> operandType = typeOf(unary.operand());
                 if (operandType.isEmpty()) {
                     yield Optional.empty();
                 }
-                Optional<PrimitiveType> result = TypeRules.resultOfUnary(unary.operator(), operandType.get());
+                if (operandType.get().isArray()) {
+                    reporter.report(new Diagnostic(
+                            ErrorPhase.TYPE,
+                            unary.range(),
+                            "operator '" + unary.operator() + "' cannot be applied to '" + operandType.get() + "'",
+                            null));
+                    yield Optional.empty();
+                }
+                Optional<PrimitiveType> result =
+                        TypeRules.resultOfUnary(unary.operator(), operandType.get().elementType());
                 if (result.isEmpty()) {
                     reporter.report(new Diagnostic(
                             ErrorPhase.TYPE,
@@ -487,17 +524,26 @@ public final class SemanticAnalyzer {
                             null));
                     yield Optional.empty();
                 }
-                yield recordType(unary, result.get());
+                yield recordType(unary, new TypeRef(result.get(), false));
             }
 
             case BinaryExpression binary -> {
-                Optional<PrimitiveType> leftType = typeOf(binary.left());
-                Optional<PrimitiveType> rightType = typeOf(binary.right());
+                Optional<TypeRef> leftType = typeOf(binary.left());
+                Optional<TypeRef> rightType = typeOf(binary.right());
                 if (leftType.isEmpty() || rightType.isEmpty()) {
                     yield Optional.empty();
                 }
-                Optional<PrimitiveType> result =
-                        TypeRules.resultOfBinary(leftType.get(), binary.operator(), rightType.get());
+                if (leftType.get().isArray() || rightType.get().isArray()) {
+                    reporter.report(new Diagnostic(
+                            ErrorPhase.TYPE,
+                            binary.range(),
+                            "operator '" + binary.operator() + "' cannot be applied to '" + leftType.get()
+                                    + "' and '" + rightType.get() + "'",
+                            null));
+                    yield Optional.empty();
+                }
+                Optional<PrimitiveType> result = TypeRules.resultOfBinary(
+                        leftType.get().elementType(), binary.operator(), rightType.get().elementType());
                 if (result.isEmpty()) {
                     reporter.report(new Diagnostic(
                             ErrorPhase.TYPE,
@@ -507,11 +553,11 @@ public final class SemanticAnalyzer {
                             null));
                     yield Optional.empty();
                 }
-                yield recordType(binary, result.get());
+                yield recordType(binary, new TypeRef(result.get(), false));
             }
 
             case AssignmentExpression assignment -> {
-                Optional<PrimitiveType> valueType = typeOf(assignment.value());
+                Optional<TypeRef> valueType = typeOf(assignment.value());
                 VariableSymbol target = assignmentTargetResolutions.get(assignment);
                 if (target == null || valueType.isEmpty()) {
                     yield Optional.empty();
@@ -528,7 +574,7 @@ public final class SemanticAnalyzer {
             }
 
             case FunctionCallExpression call -> {
-                List<Optional<PrimitiveType>> argumentTypes = new ArrayList<>();
+                List<Optional<TypeRef>> argumentTypes = new ArrayList<>();
                 for (Expr argument : call.arguments()) {
                     argumentTypes.add(typeOf(argument));
                 }
@@ -538,7 +584,7 @@ public final class SemanticAnalyzer {
                     yield Optional.empty();
                 }
 
-                List<PrimitiveType> parameterTypes = callee.parameterTypes();
+                List<TypeRef> parameterTypes = callee.parameterTypes();
                 if (argumentTypes.size() != parameterTypes.size()) {
                     reporter.report(new Diagnostic(
                             ErrorPhase.TYPE,
@@ -550,11 +596,11 @@ public final class SemanticAnalyzer {
 
                 int checked = Math.min(argumentTypes.size(), parameterTypes.size());
                 for (int i = 0; i < checked; i++) {
-                    Optional<PrimitiveType> argumentType = argumentTypes.get(i);
+                    Optional<TypeRef> argumentType = argumentTypes.get(i);
                     if (argumentType.isEmpty()) {
                         continue; // already poisoned/reported upstream
                     }
-                    PrimitiveType parameterType = parameterTypes.get(i);
+                    TypeRef parameterType = parameterTypes.get(i);
                     if (!TypeRules.isArgumentCompatible(argumentType.get(), parameterType)) {
                         reporter.report(new Diagnostic(
                                 ErrorPhase.TYPE,
@@ -567,10 +613,109 @@ public final class SemanticAnalyzer {
 
                 yield recordType(call, callee.returnType());
             }
+
+            case NewArrayExpression newArray -> {
+                Optional<TypeRef> sizeType = typeOf(newArray.size());
+                boolean sizeOk = sizeType.isPresent()
+                        && !sizeType.get().isArray()
+                        && sizeType.get().elementType() == PrimitiveType.INT;
+                if (sizeType.isPresent() && !sizeOk) {
+                    reporter.report(new Diagnostic(
+                            ErrorPhase.TYPE,
+                            newArray.size().range(),
+                            "array size must be 'INT', found '" + sizeType.get() + "'",
+                            null));
+                }
+                if (newArray.elementType() == PrimitiveType.VOID) {
+                    reporter.report(new Diagnostic(
+                            ErrorPhase.TYPE,
+                            newArray.range(),
+                            "array element type cannot be 'none'",
+                            null));
+                    yield Optional.empty();
+                }
+                yield recordType(newArray, new TypeRef(newArray.elementType(), true));
+            }
+
+            case ArrayAccessExpression access -> {
+                Optional<TypeRef> arrayType = typeOf(access.array());
+                Optional<TypeRef> indexType = typeOf(access.index());
+                if (arrayType.isPresent() && !arrayType.get().isArray()) {
+                    reporter.report(new Diagnostic(
+                            ErrorPhase.TYPE,
+                            access.array().range(),
+                            "cannot index into non-array type '" + arrayType.get() + "'",
+                            null));
+                    yield Optional.empty();
+                }
+                if (indexType.isPresent() && (indexType.get().isArray() || indexType.get().elementType() != PrimitiveType.INT)) {
+                    reporter.report(new Diagnostic(
+                            ErrorPhase.TYPE,
+                            access.index().range(),
+                            "array index must be 'INT', found '" + indexType.get() + "'",
+                            null));
+                }
+                if (arrayType.isEmpty()) {
+                    yield Optional.empty();
+                }
+                yield recordType(access, new TypeRef(arrayType.get().elementType(), false));
+            }
+
+            case ArrayLengthExpression length -> {
+                Optional<TypeRef> arrayType = typeOf(length.array());
+                if (arrayType.isEmpty()) {
+                    yield Optional.empty();
+                }
+                if (!arrayType.get().isArray()) {
+                    reporter.report(new Diagnostic(
+                            ErrorPhase.TYPE,
+                            length.array().range(),
+                            "'.len()' can only be called on an array, found '" + arrayType.get() + "'",
+                            null));
+                    yield Optional.empty();
+                }
+                yield recordType(length, new TypeRef(PrimitiveType.INT, false));
+            }
+
+            case IndexAssignmentExpression indexAssignment -> {
+                Optional<TypeRef> arrayType = typeOf(indexAssignment.array());
+                Optional<TypeRef> indexType = typeOf(indexAssignment.index());
+                Optional<TypeRef> valueType = typeOf(indexAssignment.value());
+
+                if (arrayType.isPresent() && !arrayType.get().isArray()) {
+                    reporter.report(new Diagnostic(
+                            ErrorPhase.TYPE,
+                            indexAssignment.array().range(),
+                            "cannot index into non-array type '" + arrayType.get() + "'",
+                            null));
+                    yield Optional.empty();
+                }
+                if (indexType.isPresent() && (indexType.get().isArray() || indexType.get().elementType() != PrimitiveType.INT)) {
+                    reporter.report(new Diagnostic(
+                            ErrorPhase.TYPE,
+                            indexAssignment.index().range(),
+                            "array index must be 'INT', found '" + indexType.get() + "'",
+                            null));
+                }
+                if (arrayType.isEmpty() || valueType.isEmpty()) {
+                    yield Optional.empty();
+                }
+
+                TypeRef elementType = new TypeRef(arrayType.get().elementType(), false);
+                if (!TypeRules.isAssignable(valueType.get(), elementType)) {
+                    reporter.report(new Diagnostic(
+                            ErrorPhase.TYPE,
+                            indexAssignment.range(),
+                            "cannot assign '" + valueType.get() + "' to array element of type '" + elementType + "'",
+                            null));
+                    yield Optional.empty();
+                }
+                yield recordType(indexAssignment, elementType);
+            }
         };
     }
 
-    private Optional<PrimitiveType> recordType(Expr expr, PrimitiveType type) {
+    private Optional<TypeRef> recordType(Expr expr, TypeRef type) {
         expressionTypes.put(expr, type);
         return Optional.of(type);
     }

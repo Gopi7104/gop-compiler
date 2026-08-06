@@ -3,37 +3,51 @@ package com.gopilang.semantic;
 import com.gopilang.ast.BinaryOperator;
 import com.gopilang.ast.UnaryOperator;
 import com.gopilang.types.PrimitiveType;
+import com.gopilang.types.TypeRef;
 
 import java.util.Optional;
 
 /**
  * The type-compatibility table: pure static functions with zero dependency
  * on {@code Scope}, {@code SemanticModel}, or the AST node hierarchy — only
- * {@code PrimitiveType}/{@code BinaryOperator}/{@code UnaryOperator}.
- * Deliberately separate from {@code SemanticAnalyzer} for independent
- * testability.
+ * {@code PrimitiveType}/{@code TypeRef}/{@code BinaryOperator}/{@code
+ * UnaryOperator}. Deliberately separate from {@code SemanticAnalyzer} for
+ * independent testability.
+ * <p>
+ * {@code resultOfUnary}/{@code resultOfBinary} stay {@code PrimitiveType}-only
+ * on purpose: arrays never reach them — {@code SemanticAnalyzer.typeOf}
+ * rejects an array-typed operand for every operator before calling in here
+ * at all, so these two methods never need to know arrays exist.
  */
 public final class TypeRules {
 
     private TypeRules() {
     }
 
-    /** Whether a value of type {@code from} may be used where {@code to} is expected (equal types, or {@code int} widening to {@code float}). */
-    public static boolean isAssignable(PrimitiveType from, PrimitiveType to) {
-        if (from == to) {
-            return from != PrimitiveType.VOID;
+    /** Whether a value of type {@code from} may be used where {@code to} is expected (equal types, or {@code int} widening to {@code float}; arrays require an exact element-type match, never widened). */
+    public static boolean isAssignable(TypeRef from, TypeRef to) {
+        if (from.isArray() || to.isArray()) {
+            return from.isArray() == to.isArray() && from.elementType() == to.elementType();
         }
-        return from == PrimitiveType.INT && to == PrimitiveType.FLOAT;
+        return isAssignable(from.elementType(), to.elementType());
     }
 
     /** Whether a {@code return} value's type is compatible with the function's declared return type. */
-    public static boolean isReturnCompatible(PrimitiveType valueType, PrimitiveType declaredReturnType) {
+    public static boolean isReturnCompatible(TypeRef valueType, TypeRef declaredReturnType) {
         return isAssignable(valueType, declaredReturnType);
     }
 
     /** Whether a call argument's type is compatible with the corresponding parameter's declared type. */
-    public static boolean isArgumentCompatible(PrimitiveType argumentType, PrimitiveType parameterType) {
+    public static boolean isArgumentCompatible(TypeRef argumentType, TypeRef parameterType) {
         return isAssignable(argumentType, parameterType);
+    }
+
+    /** Scalar assignability only (equal types, or {@code int} widening to {@code float}) — the non-array half of {@link #isAssignable(TypeRef, TypeRef)}. */
+    private static boolean isAssignable(PrimitiveType from, PrimitiveType to) {
+        if (from == to) {
+            return from != PrimitiveType.VOID;
+        }
+        return from == PrimitiveType.INT && to == PrimitiveType.FLOAT;
     }
 
     /** The result type of applying {@code operator} to {@code operand}, or empty if the combination is not legal. */
@@ -57,9 +71,12 @@ public final class TypeRules {
         };
     }
 
-    /** Whether {@code print(...)} accepts a value of this type (every primitive except {@code void}). */
-    public static boolean isPrintable(PrimitiveType type) {
-        return switch (type) {
+    /** Whether {@code show(...)} accepts a value of this type (every scalar primitive except {@code none}; no array). */
+    public static boolean isPrintable(TypeRef type) {
+        if (type.isArray()) {
+            return false;
+        }
+        return switch (type.elementType()) {
             case INT, FLOAT, BOOL, STRING -> true;
             case VOID -> false;
         };

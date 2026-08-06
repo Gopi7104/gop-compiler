@@ -48,15 +48,23 @@ class LexerTest {
     }
 
     @Test
-    void secondDecimalPointIsALexicalError() {
+    void dotAfterAFloatLiteralIsItsOwnTokenNotAnotherDecimalPoint() {
+        // Since GopiLang v2 added '.' as a real operator (array.len()), a
+        // second decimal point right after a float literal is no longer a
+        // lexical error — the lexer only ever consumes ONE '.' into a
+        // number (scanNumber's own peek()/peekNext() lookahead), so a
+        // second one here is simply the start of a new, separate token.
+        // Whether "12.34.56" means anything is a parser/semantic question,
+        // not a lexical one.
         Lexer lexer = new Lexer("12.34.56");
         List<Token> tokens = lexer.scanTokens();
 
-        assertEquals(List.of(TokenType.FLOAT_LITERAL, TokenType.INT_LITERAL, TokenType.EOF), types(tokens));
+        assertFalse(lexer.reporter().hasErrors());
+        assertEquals(
+                List.of(TokenType.FLOAT_LITERAL, TokenType.DOT, TokenType.INT_LITERAL, TokenType.EOF),
+                types(tokens));
         assertEquals(12.34, tokens.get(0).literal());
-        assertEquals(56, tokens.get(1).literal());
-
-        assertEquals(1, lexer.reporter().diagnostics().size());
+        assertEquals(56, tokens.get(2).literal());
     }
 
     @Test
