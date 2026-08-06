@@ -20,18 +20,18 @@ import java.util.Map;
 public final class Lexer {
 
     private static final Map<String, TokenType> KEYWORDS = Map.ofEntries(
-            Map.entry("int", TokenType.KW_INT),
-            Map.entry("float", TokenType.KW_FLOAT),
-            Map.entry("bool", TokenType.KW_BOOL),
-            Map.entry("string", TokenType.KW_STRING),
-            Map.entry("void", TokenType.KW_VOID),
+            Map.entry("num", TokenType.KW_INT),
+            Map.entry("dec", TokenType.KW_FLOAT),
+            Map.entry("flag", TokenType.KW_BOOL),
+            Map.entry("text", TokenType.KW_STRING),
+            Map.entry("none", TokenType.KW_VOID),
             Map.entry("if", TokenType.KW_IF),
             Map.entry("else", TokenType.KW_ELSE),
-            Map.entry("while", TokenType.KW_WHILE),
-            Map.entry("return", TokenType.KW_RETURN),
-            Map.entry("print", TokenType.KW_PRINT),
-            Map.entry("true", TokenType.BOOLEAN_LITERAL),
-            Map.entry("false", TokenType.BOOLEAN_LITERAL)
+            Map.entry("loop", TokenType.KW_WHILE),
+            Map.entry("give", TokenType.KW_RETURN),
+            Map.entry("show", TokenType.KW_PRINT),
+            Map.entry("yes", TokenType.BOOLEAN_LITERAL),
+            Map.entry("no", TokenType.BOOLEAN_LITERAL)
     );
 
     private final String source;
@@ -204,7 +204,7 @@ public final class Lexer {
         TokenType type = KEYWORDS.get(lexeme);
 
         if (type == TokenType.BOOLEAN_LITERAL) {
-            addToken(type, Boolean.parseBoolean(lexeme));
+            addToken(type, lexeme.equals("yes"));
         } else if (type != null) {
             addToken(type);
         } else {

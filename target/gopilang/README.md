@@ -5,16 +5,16 @@ GopiLang is a small, statically-typed programming language with a complete, from
 This project exists for deep, first-principles understanding of how a real compiler and virtual machine work end to end, built incrementally, one class at a time. It is not optimized for shipping speed — it's optimized for understanding every decision along the way.
 
 ```
-int factorial(int n) {
+num factorial(num n) {
     if (n <= 1) {
-        return 1;
+        give 1;
     } else {
-        return n * factorial(n - 1);
+        give n * factorial(n - 1);
     }
 }
 
-void main() {
-    print(factorial(5));
+none main() {
+    show(factorial(5));
 }
 ```
 ```
@@ -30,7 +30,7 @@ $ ./gopic examples/factorial.gopi
 - **A stack-based virtual machine** with call frames, a shared instruction stream, and full function-call/recursion support.
 - **Rich diagnostics** with source-line rendering and caret underlines for lexical, syntax, and semantic errors.
 - **A disassembler** for inspecting exactly what the compiler generated, without needing to run it.
-- **Language features**: static types (`int`, `float`, `bool`, `string`, `void`), variables, arithmetic and comparison operators, `if`/`else`, `while`, user-defined functions, recursion, and `print`.
+- **Language features**: static types (`num`, `dec`, `flag`, `text`, `none`), variables, arithmetic and comparison operators, `if`/`else`, `loop`, user-defined functions, recursion, and `show`.
 
 Known gap (tracked, not hidden): `&&`/`||` parse and type-check correctly but are not yet compiled to bytecode — see [Future Roadmap](#future-roadmap).
 
@@ -215,10 +215,10 @@ $ ./gopic examples/semantic/undefined_variable.gopi
 1 semantic error(s):
 
 Semantic Error: undefined variable 'y'
- --> line 9, column 11
+ --> line 9, column 10
   |
-9 |     print(y);
-  |           ^
+9 |     show(y);
+  |          ^
 
 $ echo $?
 1
@@ -280,8 +280,8 @@ All of these live in [`examples/`](examples/) and can be run directly.
 
 **Hello World** ([`hello.gopi`](examples/hello.gopi))
 ```
-void main() {
-    print("Hello, GopiLang!");
+none main() {
+    show("Hello, GopiLang!");
 }
 ```
 ```
@@ -291,12 +291,12 @@ Hello, GopiLang!
 
 **Functions** ([`function_calls.gopi`](examples/function_calls.gopi))
 ```
-int add(int a, int b) {
-    return a + b;
+num add(num a, num b) {
+    give a + b;
 }
 
-void main() {
-    print(add(1, 2));
+none main() {
+    show(add(1, 2));
 }
 ```
 ```
@@ -306,16 +306,16 @@ $ ./gopic examples/function_calls.gopi
 
 **Recursion** ([`factorial.gopi`](examples/factorial.gopi))
 ```
-int factorial(int n) {
+num factorial(num n) {
     if (n <= 1) {
-        return 1;
+        give 1;
     } else {
-        return n * factorial(n - 1);
+        give n * factorial(n - 1);
     }
 }
 
-void main() {
-    print(factorial(5));
+none main() {
+    show(factorial(5));
 }
 ```
 ```
@@ -325,9 +325,9 @@ $ ./gopic examples/factorial.gopi
 
 **Operator precedence** ([`arithmetic.gopi`](examples/arithmetic.gopi))
 ```
-void main() {
-    print(1 + 2 * 3);
-    print((1 + 2) * 3);
+none main() {
+    show(1 + 2 * 3);
+    show((1 + 2) * 3);
 }
 ```
 ```
@@ -338,11 +338,11 @@ $ ./gopic examples/arithmetic.gopi
 
 **Chained assignment** ([`assignment_chains.gopi`](examples/assignment_chains.gopi))
 ```
-void main() {
-    int a;
-    int b;
+none main() {
+    num a;
+    num b;
     a = b = 5;
-    print(a);
+    show(a);
 }
 ```
 ```
@@ -352,11 +352,11 @@ $ ./gopic examples/assignment_chains.gopi
 
 **Nested control flow** ([`nested_control_flow.gopi`](examples/nested_control_flow.gopi))
 ```
-void main() {
-    int x = 10;
-    while (x > 0) {
+none main() {
+    num x = 10;
+    loop (x > 0) {
         if (x == 5) {
-            print(x);
+            show(x);
             x = x - 1;
         } else {
             x = x - 1;

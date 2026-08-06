@@ -28,7 +28,7 @@ class ParserRecoveryTest {
         // Regression test: synchronize() must not consume a '}' that
         // parseBlock()'s own loop is waiting to see, or parsing runs on into
         // whatever follows the block.
-        Parser parser = parserFor("int add(int a, int b) { return a + } void main() { print(1); }");
+        Parser parser = parserFor("num add(num a, num b) { give a + } none main() { show(1); }");
         Program program = parser.parseProgram();
 
         assertEquals(List.of("add", "main"), functionNames(program));
@@ -37,7 +37,7 @@ class ParserRecoveryTest {
 
     @Test
     void midBlockStatementErrorRecoversWithSiblingStatementsIntact() {
-        Parser parser = parserFor("void main() { int x = 1; int y = ; int z = 3; }");
+        Parser parser = parserFor("none main() { num x = 1; num y = ; num z = 3; }");
         Program program = parser.parseProgram();
 
         assertEquals(List.of("main"), functionNames(program));
@@ -49,7 +49,7 @@ class ParserRecoveryTest {
     void multipleIndependentErrorsAcrossFunctionsAreAllReported() {
         // Regression test: a stray '}' with no enclosing block waiting for it
         // (broken1's malformed parameter list) must not hang synchronize().
-        Parser parser = parserFor("int broken1( { } void main() { print(1); } int broken2() { return + ; }");
+        Parser parser = parserFor("num broken1( { } none main() { show(1); } num broken2() { give + ; }");
         Program program = parser.parseProgram();
 
         assertEquals(List.of("main", "broken2"), functionNames(program));
@@ -64,7 +64,7 @@ class ParserRecoveryTest {
         // ')' is a perfectly valid token lexically — the lexer never touches
         // it — but it can't start a statement, so this exercises the general
         // "no special case matches, just advance and keep looking" path.
-        Parser parser = parserFor("void main() { ) print(1); } void after() { print(2); }");
+        Parser parser = parserFor("none main() { ) show(1); } none after() { show(2); }");
         Program program = parser.parseProgram();
 
         assertEquals(List.of("main", "after"), functionNames(program));
@@ -73,7 +73,7 @@ class ParserRecoveryTest {
 
     @Test
     void consumeErrorNamesTheTokenThatWasActuallyFound() {
-        Parser parser = parserFor("void main() { print(1) }"); // missing ';'
+        Parser parser = parserFor("none main() { show(1) }"); // missing ';'
         parser.parseProgram();
 
         assertEquals(1, parser.reporter().diagnostics().size());
@@ -83,7 +83,7 @@ class ParserRecoveryTest {
 
     @Test
     void consumeErrorAtEndOfFileUsesEofPhrasingNotAnEmptyLexeme() {
-        Parser parser = parserFor("void main() { print(1);"); // missing '}'
+        Parser parser = parserFor("none main() { show(1);"); // missing '}'
         parser.parseProgram();
 
         assertTrue(parser.reporter().hasErrors());

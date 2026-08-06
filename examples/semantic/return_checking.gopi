@@ -2,34 +2,34 @@
 // Expected: 4 diagnostics:
 //   1. [TYPE] "cannot return a value from a function declared 'VOID'" (noop).
 //   2. [TYPE] "missing return value in function declared to return 'INT'"
-//      (missingValue's bare `return;`).
+//      (missingValue's bare `give;`).
 //   3. [TYPE] "cannot return 'BOOL' from a function declared to return 'INT'"
 //      (wrongType).
 //   4. [TYPE] "function 'noReturnOnAllPaths' does not return a value on all
 //      paths" — reachability, not a per-statement return check.
 // correct() produces nothing.
 
-void noop() {
-    return 5;
+none noop() {
+    give 5;
 }
 
-int missingValue() {
-    return;
+num missingValue() {
+    give;
 }
 
-int wrongType() {
-    return true;
+num wrongType() {
+    give yes;
 }
 
-int noReturnOnAllPaths(bool flag) {
-    if (flag) {
-        return 1;
+num noReturnOnAllPaths(flag f) {
+    if (f) {
+        give 1;
     }
 }
 
-int correct() {
-    return 1;
+num correct() {
+    give 1;
 }
 
-void main() {
+none main() {
 }

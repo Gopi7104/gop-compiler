@@ -1,6 +1,6 @@
 // arithmetic.gopi - operator precedence and associativity
 
-void main() {
-    print(1 + 2 * 3);
-    print((1 + 2) * 3);
+none main() {
+    show(1 + 2 * 3);
+    show((1 + 2) * 3);
 }

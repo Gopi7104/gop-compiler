@@ -1,17 +1,17 @@
 // shadowing.gopi
 // Expected: 2 diagnostics (both SEMANTIC):
 //   1. "variable 'x' shadows a variable from an enclosing scope" — the inner
-//      block's own `int x` redeclares a name already bound in main's scope.
+//      block's own `num x` redeclares a name already bound in main's scope.
 //   2. "variable 'x' might not have been assigned a value" — the OUTER x
-//      (read in the final print) is never assigned; the inner block's own
+//      (read in the final show) is never assigned; the inner block's own
 //      x = 5 assigns a DIFFERENT symbol (identity-distinct despite the same
 //      name) and does not satisfy the outer read.
 
-void main() {
-    int x;
+none main() {
+    num x;
     {
-        int x = 5;
-        print(x);
+        num x = 5;
+        show(x);
     }
-    print(x);
+    show(x);
 }

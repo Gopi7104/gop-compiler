@@ -110,14 +110,14 @@ public final class SemanticAnalyzer {
                     ErrorPhase.SEMANTIC,
                     program.range(),
                     "program has no 'main' function",
-                    "add a 'void main()' function as the program's entry point"));
+                    "add a 'none main()' function as the program's entry point"));
             return;
         }
         if (main.returnType() != PrimitiveType.VOID || !main.parameterTypes().isEmpty()) {
             reporter.report(new Diagnostic(
                     ErrorPhase.SEMANTIC,
                     main.declaredAt(),
-                    "'main' must have the signature 'void main()'",
+                    "'main' must have the signature 'none main()'",
                     "found return type '" + main.returnType() + "' with "
                             + main.parameterTypes().size() + " parameter(s)"));
         }

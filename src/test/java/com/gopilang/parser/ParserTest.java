@@ -34,7 +34,7 @@ class ParserTest {
                     Program
                     └── FunctionDeclaration main() -> VOID
                         └── BlockStatement
-                    """, parseAndPrint("void main() { }"));
+                    """, parseAndPrint("none main() { }"));
         }
 
         @Test
@@ -49,13 +49,13 @@ class ParserTest {
                                 └── BinaryExpression [ADD]
                                     ├── VariableExpression a
                                     └── VariableExpression b
-                    """, parseAndPrint("int add(int a, int b) { return a + b; }"));
+                    """, parseAndPrint("num add(num a, num b) { give a + b; }"));
         }
 
         @Test
         void everyPrimitiveReturnTypeParses() {
-            String source = "int f1() { return 1; } float f2() { return 1.0; } "
-                    + "bool f3() { return true; } string f4() { return \"x\"; } void f5() { }";
+            String source = "num f1() { give 1; } dec f2() { give 1.0; } "
+                    + "flag f3() { give yes; } text f4() { give \"x\"; } none f5() { }";
             Parser parser = new Parser(new Lexer(source).scanTokens());
             Program program = parser.parseProgram();
             assertFalse(parser.reporter().hasErrors());
@@ -77,7 +77,7 @@ class ParserTest {
                         └── BlockStatement
                             └── VariableDeclaration INT x
                                 └── LiteralExpression 10 (INT)
-                    """, parseAndPrint("void main() { int x = 10; }"));
+                    """, parseAndPrint("none main() { num x = 10; }"));
         }
 
         @Test
@@ -87,7 +87,7 @@ class ParserTest {
                     └── FunctionDeclaration main() -> VOID
                         └── BlockStatement
                             └── VariableDeclaration INT x
-                    """, parseAndPrint("void main() { int x; }"));
+                    """, parseAndPrint("none main() { num x; }"));
         }
 
         @Test
@@ -98,7 +98,7 @@ class ParserTest {
                         └── BlockStatement
                             └── ReturnStatement
                                 └── LiteralExpression 5 (INT)
-                    """, parseAndPrint("int getFive() { return 5; }"));
+                    """, parseAndPrint("num getFive() { give 5; }"));
         }
 
         @Test
@@ -108,7 +108,7 @@ class ParserTest {
                     └── FunctionDeclaration doNothing() -> VOID
                         └── BlockStatement
                             └── ReturnStatement
-                    """, parseAndPrint("void doNothing() { return; }"));
+                    """, parseAndPrint("none doNothing() { give; }"));
         }
 
         @Test
@@ -119,7 +119,7 @@ class ParserTest {
                         └── BlockStatement
                             └── PrintStatement
                                 └── LiteralExpression 42 (INT)
-                    """, parseAndPrint("void main() { print(42); }"));
+                    """, parseAndPrint("none main() { show(42); }"));
         }
     }
 
@@ -132,7 +132,7 @@ class ParserTest {
 
         @Test
         void literalsOfEveryType() {
-            String source = "void main() { print(1); print(1.5); print(true); print(\"hi\"); }";
+            String source = "none main() { show(1); show(1.5); show(yes); show(\"hi\"); }";
             Parser parser = new Parser(new Lexer(source).scanTokens());
             Program program = parser.parseProgram();
             assertFalse(parser.reporter().hasErrors());
@@ -147,7 +147,7 @@ class ParserTest {
                             └── PrintStatement
                                 └── GroupingExpression
                                     └── LiteralExpression 5 (INT)
-                    """, parseAndPrint("void main() { print((5)); }"));
+                    """, parseAndPrint("none main() { show((5)); }"));
         }
 
         @Test
@@ -159,7 +159,7 @@ class ParserTest {
                             └── PrintStatement
                                 └── UnaryExpression [NEGATE]
                                     └── VariableExpression x
-                    """, parseAndPrint("void main() { print(-x); }"));
+                    """, parseAndPrint("none main() { show(-x); }"));
         }
     }
 
@@ -182,7 +182,7 @@ class ParserTest {
                                     └── BinaryExpression [MULTIPLY]
                                         ├── LiteralExpression 2 (INT)
                                         └── LiteralExpression 3 (INT)
-                    """, parseAndPrint("void main() { print(1 + 2 * 3); }"));
+                    """, parseAndPrint("none main() { show(1 + 2 * 3); }"));
         }
 
         @Test
@@ -197,7 +197,7 @@ class ParserTest {
                                     │   ├── VariableExpression x
                                     │   └── LiteralExpression 5 (INT)
                                     └── VariableExpression y
-                    """, parseAndPrint("void main() { print(x < 5 && y); }"));
+                    """, parseAndPrint("none main() { show(x < 5 && y); }"));
         }
 
         @Test
@@ -213,7 +213,7 @@ class ParserTest {
                                     │       ├── LiteralExpression 1 (INT)
                                     │       └── LiteralExpression 2 (INT)
                                     └── LiteralExpression 3 (INT)
-                    """, parseAndPrint("void main() { print((1 + 2) * 3); }"));
+                    """, parseAndPrint("none main() { show((1 + 2) * 3); }"));
         }
     }
 
@@ -236,7 +236,7 @@ class ParserTest {
                                     │   ├── LiteralExpression 1 (INT)
                                     │   └── LiteralExpression 2 (INT)
                                     └── LiteralExpression 3 (INT)
-                    """, parseAndPrint("void main() { print(1 - 2 - 3); }"));
+                    """, parseAndPrint("none main() { show(1 - 2 - 3); }"));
         }
 
         @Test
@@ -251,7 +251,7 @@ class ParserTest {
                             │           └── LiteralExpression 5 (INT)
                             └── PrintStatement
                                 └── VariableExpression a
-                    """, parseAndPrint("void main() { a = b = 5; print(a); }"));
+                    """, parseAndPrint("none main() { a = b = 5; show(a); }"));
         }
 
         @Test
@@ -264,7 +264,7 @@ class ParserTest {
                                 └── UnaryExpression [NEGATE]
                                     └── UnaryExpression [NEGATE]
                                         └── VariableExpression x
-                    """, parseAndPrint("void main() { print(- -x); }"));
+                    """, parseAndPrint("none main() { show(- -x); }"));
         }
     }
 
@@ -285,7 +285,7 @@ class ParserTest {
                                 └── FunctionCallExpression add(2 args)
                                     ├── LiteralExpression 1 (INT)
                                     └── LiteralExpression 2 (INT)
-                    """, parseAndPrint("void main() { print(add(1, 2)); }"));
+                    """, parseAndPrint("none main() { show(add(1, 2)); }"));
         }
 
         @Test
@@ -296,7 +296,7 @@ class ParserTest {
                         └── BlockStatement
                             └── PrintStatement
                                 └── FunctionCallExpression now(0 args)
-                    """, parseAndPrint("void main() { print(now()); }"));
+                    """, parseAndPrint("none main() { show(now()); }"));
         }
     }
 
@@ -316,12 +316,12 @@ class ParserTest {
                             └── BlockStatement
                                 └── PrintStatement
                                     └── LiteralExpression 1 (INT)
-                    """, parseAndPrint("void main() { { print(1); } }"));
+                    """, parseAndPrint("none main() { { show(1); } }"));
         }
 
         @Test
         void whileBodyContainingAnIf() {
-            String printed = parseAndPrint("void main() { while (x > 0) { if (x == 5) { print(x); } } }");
+            String printed = parseAndPrint("none main() { loop (x > 0) { if (x == 5) { show(x); } } }");
             assertTrue(printed.contains("WhileStatement"));
             assertTrue(printed.contains("IfStatement"));
         }
@@ -353,7 +353,7 @@ class ParserTest {
                                         └── else
                                             └── PrintStatement
                                                 └── LiteralExpression 2 (INT)
-                    """, parseAndPrint("void main() { if (a) if (b) print(1); else print(2); }"));
+                    """, parseAndPrint("none main() { if (a) if (b) show(1); else show(2); }"));
         }
 
         @Test
@@ -376,7 +376,7 @@ class ParserTest {
                                 └── else
                                     └── PrintStatement
                                         └── LiteralExpression 2 (INT)
-                    """, parseAndPrint("void main() { if (a) { if (b) print(1); } else print(2); }"));
+                    """, parseAndPrint("none main() { if (a) { if (b) show(1); } else show(2); }"));
         }
     }
 
@@ -389,14 +389,14 @@ class ParserTest {
 
         @Test
         void missingSemicolonIsReported() {
-            Parser parser = new Parser(new Lexer("void main() { print(1) }").scanTokens());
+            Parser parser = new Parser(new Lexer("none main() { show(1) }").scanTokens());
             parser.parseProgram();
             assertTrue(parser.reporter().hasErrors());
         }
 
         @Test
         void missingClosingParenIsReported() {
-            Parser parser = new Parser(new Lexer("void main() { print(1; }").scanTokens());
+            Parser parser = new Parser(new Lexer("none main() { show(1; }").scanTokens());
             parser.parseProgram();
             assertTrue(parser.reporter().hasErrors());
         }
@@ -404,6 +404,15 @@ class ParserTest {
         @Test
         void invalidTokenWhereTypeExpectedIsReported() {
             Parser parser = new Parser(new Lexer("+ main() { }").scanTokens());
+            parser.parseProgram();
+            assertTrue(parser.reporter().hasErrors());
+        }
+
+        @Test
+        void oldKeywordSpellingIsRejectedAsAType() {
+            // "void" is retired by the v1.1 keyword migration — it now lexes
+            // as a plain identifier, which can't start a function declaration.
+            Parser parser = new Parser(new Lexer("void main() { }").scanTokens());
             parser.parseProgram();
             assertTrue(parser.reporter().hasErrors());
         }

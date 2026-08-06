@@ -151,7 +151,7 @@ public final class Parser {
 
     private ReturnStatement parseReturnStatement() {
         SourceLocation start = peek().location();
-        consume(TokenType.KW_RETURN, "expected 'return'");
+        consume(TokenType.KW_RETURN, "expected 'give'");
         Optional<Expr> value = Optional.empty();
         if (!check(TokenType.SEMICOLON)) {
             value = Optional.of(parseExpression());
@@ -162,11 +162,11 @@ public final class Parser {
 
     private PrintStatement parsePrintStatement() {
         SourceLocation start = peek().location();
-        consume(TokenType.KW_PRINT, "expected 'print'");
-        consume(TokenType.LEFT_PAREN, "expected '(' after 'print'");
+        consume(TokenType.KW_PRINT, "expected 'show'");
+        consume(TokenType.LEFT_PAREN, "expected '(' after 'show'");
         Expr value = parseExpression();
         consume(TokenType.RIGHT_PAREN, "expected ')' after expression");
-        Token semicolon = consume(TokenType.SEMICOLON, "expected ';' after print statement");
+        Token semicolon = consume(TokenType.SEMICOLON, "expected ';' after show statement");
         return new PrintStatement(value, new SourceRange(start, semicolon.location()));
     }
 
@@ -187,8 +187,8 @@ public final class Parser {
 
     private WhileStatement parseWhileStatement() {
         SourceLocation start = peek().location();
-        consume(TokenType.KW_WHILE, "expected 'while'");
-        consume(TokenType.LEFT_PAREN, "expected '(' after 'while'");
+        consume(TokenType.KW_WHILE, "expected 'loop'");
+        consume(TokenType.LEFT_PAREN, "expected '(' after 'loop'");
         Expr condition = parseExpression();
         consume(TokenType.RIGHT_PAREN, "expected ')' after condition");
         Stmt body = parseStatement();

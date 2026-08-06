@@ -3,10 +3,10 @@
 // assigned a value". The if has no else, so the false path skips the
 // assignment entirely; x cannot be considered definitely assigned afterward.
 
-void main() {
-    int x;
-    if (true) {
+none main() {
+    num x;
+    if (yes) {
         x = 5;
     }
-    print(x);
+    show(x);
 }

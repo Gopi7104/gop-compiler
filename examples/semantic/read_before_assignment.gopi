@@ -3,7 +3,7 @@
 // assigned a value". x is declared with no initializer and read before any
 // assignment reaches it.
 
-void main() {
-    int x;
-    print(x);
+none main() {
+    num x;
+    show(x);
 }

@@ -5,13 +5,13 @@
 //   3. [TYPE] "argument 2 of 'add': expected 'INT', found 'BOOL'" — wrong type.
 // The correctly-formed call (add(1, 2)) produces nothing.
 
-int add(int a, int b) {
-    return a + b;
+num add(num a, num b) {
+    give a + b;
 }
 
-void main() {
-    print(add(1, 2));
+none main() {
+    show(add(1, 2));
     missing();
     add(1);
-    add(1, true);
+    add(1, yes);
 }

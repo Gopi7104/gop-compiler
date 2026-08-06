@@ -5,6 +5,6 @@
 // all), and the assignment check only runs once resolution has already
 // succeeded, to avoid exactly this kind of cascade.
 
-void main() {
-    print(y);
+none main() {
+    show(y);
 }

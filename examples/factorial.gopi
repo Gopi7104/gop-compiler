@@ -1,13 +1,13 @@
 // factorial.gopi - recursive factorial
 
-int factorial(int n) {
+num factorial(num n) {
     if (n <= 1) {
-        return 1;
+        give 1;
     } else {
-        return n * factorial(n - 1);
+        give n * factorial(n - 1);
     }
 }
 
-void main() {
-    print(factorial(5));
+none main() {
+    show(factorial(5));
 }

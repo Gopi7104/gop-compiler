@@ -17,7 +17,7 @@ class LexerTest {
 
     @Test
     void workedExampleFromDesignDiscussion() {
-        Lexer lexer = new Lexer("int x = 10;\nprint(x + 5);");
+        Lexer lexer = new Lexer("num x = 10;\nshow(x + 5);");
         List<Token> tokens = lexer.scanTokens();
 
         assertFalse(lexer.reporter().hasErrors());
@@ -162,7 +162,7 @@ class LexerTest {
 
     @Test
     void keywordsAreNotIdentifiers() {
-        Lexer lexer = new Lexer("int intx true false");
+        Lexer lexer = new Lexer("num numx yes no");
         List<Token> tokens = lexer.scanTokens();
 
         assertEquals(
@@ -175,7 +175,7 @@ class LexerTest {
 
     @Test
     void commentsProduceNoTokens() {
-        Lexer lexer = new Lexer("int x = 1; // trailing comment\nint y = 2;");
+        Lexer lexer = new Lexer("num x = 1; // trailing comment\nnum y = 2;");
         List<Token> tokens = lexer.scanTokens();
 
         assertFalse(lexer.reporter().hasErrors());
@@ -183,6 +183,21 @@ class LexerTest {
                 List.of(TokenType.KW_INT, TokenType.IDENTIFIER, TokenType.ASSIGN, TokenType.INT_LITERAL,
                         TokenType.SEMICOLON, TokenType.KW_INT, TokenType.IDENTIFIER, TokenType.ASSIGN,
                         TokenType.INT_LITERAL, TokenType.SEMICOLON, TokenType.EOF),
+                types(tokens));
+    }
+
+    @Test
+    void oldKeywordSpellingsAreNowPlainIdentifiers() {
+        // The v1.1 keyword migration retired these spellings entirely — the
+        // lexer has no memory of them, so they lex as ordinary identifiers.
+        Lexer lexer = new Lexer("int float bool string void while return print true false");
+        List<Token> tokens = lexer.scanTokens();
+
+        assertFalse(lexer.reporter().hasErrors());
+        assertEquals(
+                List.of(TokenType.IDENTIFIER, TokenType.IDENTIFIER, TokenType.IDENTIFIER, TokenType.IDENTIFIER,
+                        TokenType.IDENTIFIER, TokenType.IDENTIFIER, TokenType.IDENTIFIER, TokenType.IDENTIFIER,
+                        TokenType.IDENTIFIER, TokenType.IDENTIFIER, TokenType.EOF),
                 types(tokens));
     }
 }

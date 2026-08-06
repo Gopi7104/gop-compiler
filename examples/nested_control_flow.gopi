@@ -1,10 +1,10 @@
-// nested_control_flow.gopi - nested if inside while
+// nested_control_flow.gopi - nested if inside loop
 
-void main() {
-    int x = 10;
-    while (x > 0) {
+none main() {
+    num x = 10;
+    loop (x > 0) {
         if (x == 5) {
-            print(x);
+            show(x);
             x = x - 1;
         } else {
             x = x - 1;

@@ -2,11 +2,11 @@
 // Expected: 0 diagnostics.
 // x is assigned via its initializer, y is assigned via a later plain
 // assignment before being read — both are definitely assigned by the time
-// print() reads them.
+// show() reads them.
 
-void main() {
-    int x = 5;
-    int y;
+none main() {
+    num x = 5;
+    num y;
     y = 10;
-    print(x + y);
+    show(x + y);
 }

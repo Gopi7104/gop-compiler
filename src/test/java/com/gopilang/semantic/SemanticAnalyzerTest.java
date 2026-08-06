@@ -46,16 +46,16 @@ class SemanticAnalyzerTest {
         @Test
         void duplicateFunctionIsReported() {
             Diagnostic d = assertSingleDiagnostic(
-                    "int add(int a, int b) { return a + b; } "
-                            + "int add(int x, int y) { return x - y; } void main() { }",
+                    "num add(num a, num b) { give a + b; } "
+                            + "num add(num x, num y) { give x - y; } none main() { }",
                     ErrorPhase.SEMANTIC);
             assertTrue(d.message().contains("already declared"));
         }
 
         @Test
         void distinctFunctionNamesAreFine() {
-            assertNoDiagnostics("int add(int a, int b) { return a + b; } "
-                    + "int sub(int a, int b) { return a - b; } void main() { }");
+            assertNoDiagnostics("num add(num a, num b) { give a + b; } "
+                    + "num sub(num a, num b) { give a - b; } none main() { }");
         }
     }
 
@@ -64,13 +64,13 @@ class SemanticAnalyzerTest {
 
         @Test
         void duplicateInSameScopeIsReported() {
-            Diagnostic d = assertSingleDiagnostic("void main() { int x = 1; int x = 2; }", ErrorPhase.SEMANTIC);
+            Diagnostic d = assertSingleDiagnostic("none main() { num x = 1; num x = 2; }", ErrorPhase.SEMANTIC);
             assertTrue(d.message().contains("already declared in this scope"));
         }
 
         @Test
         void duplicateParameterIsReported() {
-            Diagnostic d = assertSingleDiagnostic("void f(int a, int a) { } void main() { }", ErrorPhase.SEMANTIC);
+            Diagnostic d = assertSingleDiagnostic("none f(num a, num a) { } none main() { }", ErrorPhase.SEMANTIC);
             assertTrue(d.message().contains("already declared"));
         }
     }
@@ -80,13 +80,13 @@ class SemanticAnalyzerTest {
 
         @Test
         void undefinedVariableReadIsReported() {
-            Diagnostic d = assertSingleDiagnostic("void main() { print(x); }", ErrorPhase.SEMANTIC);
+            Diagnostic d = assertSingleDiagnostic("none main() { show(x); }", ErrorPhase.SEMANTIC);
             assertTrue(d.message().contains("undefined variable 'x'"));
         }
 
         @Test
         void undefinedAssignmentTargetIsReported() {
-            Diagnostic d = assertSingleDiagnostic("void main() { x = 5; }", ErrorPhase.SEMANTIC);
+            Diagnostic d = assertSingleDiagnostic("none main() { x = 5; }", ErrorPhase.SEMANTIC);
             assertTrue(d.message().contains("undefined variable 'x'"));
         }
     }
@@ -96,7 +96,7 @@ class SemanticAnalyzerTest {
 
         @Test
         void undefinedFunctionCallIsReported() {
-            Diagnostic d = assertSingleDiagnostic("void main() { foo(); }", ErrorPhase.SEMANTIC);
+            Diagnostic d = assertSingleDiagnostic("none main() { foo(); }", ErrorPhase.SEMANTIC);
             assertTrue(d.message().contains("undefined function 'foo'"));
         }
     }
@@ -107,13 +107,13 @@ class SemanticAnalyzerTest {
         @Test
         void shadowingOuterVariableIsReported() {
             Diagnostic d = assertSingleDiagnostic(
-                    "void main() { int x = 1; { int x = 2; print(x); } }", ErrorPhase.SEMANTIC);
+                    "none main() { num x = 1; { num x = 2; show(x); } }", ErrorPhase.SEMANTIC);
             assertTrue(d.message().contains("shadows a variable from an enclosing scope"));
         }
 
         @Test
         void sameNameInSiblingScopesIsFine() {
-            assertNoDiagnostics("void main() { { int x = 1; print(x); } { int x = 2; print(x); } }");
+            assertNoDiagnostics("none main() { { num x = 1; show(x); } { num x = 2; show(x); } }");
         }
     }
 
@@ -122,18 +122,18 @@ class SemanticAnalyzerTest {
 
         @Test
         void wideningIntToFloatIsAllowed() {
-            assertNoDiagnostics("void main() { float x = 5; print(x); }");
+            assertNoDiagnostics("none main() { dec x = 5; show(x); }");
         }
 
         @Test
         void narrowingFloatToIntIsRejected() {
-            Diagnostic d = assertSingleDiagnostic("void main() { int x = 5.0; print(x); }", ErrorPhase.TYPE);
+            Diagnostic d = assertSingleDiagnostic("none main() { num x = 5.0; show(x); }", ErrorPhase.TYPE);
             assertTrue(d.message().contains("cannot assign"));
         }
 
         @Test
         void mismatchedAssignmentExpressionIsRejected() {
-            Diagnostic d = assertSingleDiagnostic("void main() { int x = 1; x = true; }", ErrorPhase.TYPE);
+            Diagnostic d = assertSingleDiagnostic("none main() { num x = 1; x = yes; }", ErrorPhase.TYPE);
             assertTrue(d.message().contains("cannot assign"));
         }
     }
@@ -143,26 +143,26 @@ class SemanticAnalyzerTest {
 
         @Test
         void returningWideningValueIsAllowed() {
-            assertNoDiagnostics("float f() { return 5; } void main() { print(f()); }");
+            assertNoDiagnostics("dec f() { give 5; } none main() { show(f()); }");
         }
 
         @Test
         void returningWrongTypeIsRejected() {
             Diagnostic d = assertSingleDiagnostic(
-                    "int f() { return true; } void main() { print(f()); }", ErrorPhase.TYPE);
+                    "num f() { give yes; } none main() { show(f()); }", ErrorPhase.TYPE);
             assertTrue(d.message().contains("cannot return"));
         }
 
         @Test
         void returningValueFromVoidFunctionIsRejected() {
-            Diagnostic d = assertSingleDiagnostic("void f() { return 5; } void main() { f(); }", ErrorPhase.TYPE);
+            Diagnostic d = assertSingleDiagnostic("none f() { give 5; } none main() { f(); }", ErrorPhase.TYPE);
             assertTrue(d.message().contains("cannot return a value from a function declared 'VOID'"));
         }
 
         @Test
         void missingReturnValueInNonVoidFunctionIsRejected() {
             Diagnostic d = assertSingleDiagnostic(
-                    "int f() { return; } void main() { print(f()); }", ErrorPhase.TYPE);
+                    "num f() { give; } none main() { show(f()); }", ErrorPhase.TYPE);
             assertTrue(d.message().contains("missing return value"));
         }
     }
@@ -173,21 +173,21 @@ class SemanticAnalyzerTest {
         @Test
         void tooFewArgumentsIsRejected() {
             Diagnostic d = assertSingleDiagnostic(
-                    "int add(int a, int b) { return a + b; } void main() { print(add(1)); }", ErrorPhase.TYPE);
+                    "num add(num a, num b) { give a + b; } none main() { show(add(1)); }", ErrorPhase.TYPE);
             assertTrue(d.message().contains("expects 2 argument(s), found 1"));
         }
 
         @Test
         void tooManyArgumentsIsRejected() {
             Diagnostic d = assertSingleDiagnostic(
-                    "int add(int a, int b) { return a + b; } void main() { print(add(1, 2, 3)); }",
+                    "num add(num a, num b) { give a + b; } none main() { show(add(1, 2, 3)); }",
                     ErrorPhase.TYPE);
             assertTrue(d.message().contains("expects 2 argument(s), found 3"));
         }
 
         @Test
         void exactArgumentCountIsFine() {
-            assertNoDiagnostics("int add(int a, int b) { return a + b; } void main() { print(add(1, 2)); }");
+            assertNoDiagnostics("num add(num a, num b) { give a + b; } none main() { show(add(1, 2)); }");
         }
     }
 
@@ -197,14 +197,14 @@ class SemanticAnalyzerTest {
         @Test
         void wrongArgumentTypeIsRejected() {
             Diagnostic d = assertSingleDiagnostic(
-                    "int add(int a, int b) { return a + b; } void main() { print(add(1, true)); }",
+                    "num add(num a, num b) { give a + b; } none main() { show(add(1, yes)); }",
                     ErrorPhase.TYPE);
             assertTrue(d.message().contains("argument 2 of 'add'"));
         }
 
         @Test
         void wideningArgumentIsAllowed() {
-            assertNoDiagnostics("float f(float x) { return x; } void main() { print(f(1)); }");
+            assertNoDiagnostics("dec f(dec x) { give x; } none main() { show(f(1)); }");
         }
     }
 
@@ -213,19 +213,19 @@ class SemanticAnalyzerTest {
 
         @Test
         void nonBoolIfConditionIsRejected() {
-            Diagnostic d = assertSingleDiagnostic("void main() { if (5) { } }", ErrorPhase.TYPE);
+            Diagnostic d = assertSingleDiagnostic("none main() { if (5) { } }", ErrorPhase.TYPE);
             assertTrue(d.message().contains("if condition must be 'BOOL'"));
         }
 
         @Test
         void nonBoolWhileConditionIsRejected() {
-            Diagnostic d = assertSingleDiagnostic("void main() { while (5) { } }", ErrorPhase.TYPE);
+            Diagnostic d = assertSingleDiagnostic("none main() { loop (5) { } }", ErrorPhase.TYPE);
             assertTrue(d.message().contains("while condition must be 'BOOL'"));
         }
 
         @Test
         void boolConditionsAreFine() {
-            assertNoDiagnostics("void main() { if (true) { } while (false) { } }");
+            assertNoDiagnostics("none main() { if (yes) { } loop (no) { } }");
         }
     }
 
@@ -235,23 +235,23 @@ class SemanticAnalyzerTest {
         @Test
         void ifWithoutElseDoesNotGuaranteeReturn() {
             Diagnostic d = assertSingleDiagnostic(
-                    "int f(bool x) { if (x) { return 1; } } void main() { }", ErrorPhase.TYPE);
+                    "num f(flag x) { if (x) { give 1; } } none main() { }", ErrorPhase.TYPE);
             assertTrue(d.message().contains("does not return a value on all paths"));
         }
 
         @Test
         void ifWithElseGuaranteesReturn() {
-            assertNoDiagnostics("int f(bool x) { if (x) { return 1; } else { return 2; } } void main() { }");
+            assertNoDiagnostics("num f(flag x) { if (x) { give 1; } else { give 2; } } none main() { }");
         }
 
         @Test
         void infiniteWhileTrueGuaranteesReturn() {
-            assertNoDiagnostics("int f() { while (true) { return 1; } } void main() { }");
+            assertNoDiagnostics("num f() { loop (yes) { give 1; } } none main() { }");
         }
 
         @Test
         void voidFunctionNeverNeedsToReturn() {
-            assertNoDiagnostics("void f() { } void main() { }");
+            assertNoDiagnostics("none f() { } none main() { }");
         }
     }
 
@@ -260,58 +260,58 @@ class SemanticAnalyzerTest {
 
         @Test
         void readBeforeAssignmentIsRejected() {
-            Diagnostic d = assertSingleDiagnostic("void main() { int x; print(x); }", ErrorPhase.SEMANTIC);
+            Diagnostic d = assertSingleDiagnostic("none main() { num x; show(x); }", ErrorPhase.SEMANTIC);
             assertTrue(d.message().contains("might not have been assigned"));
         }
 
         @Test
         void assignThenReadIsFine() {
-            assertNoDiagnostics("void main() { int x; x = 5; print(x); }");
+            assertNoDiagnostics("none main() { num x; x = 5; show(x); }");
         }
 
         @Test
         void initializerCountsAsAssigned() {
-            assertNoDiagnostics("void main() { int x = 5; print(x); }");
+            assertNoDiagnostics("none main() { num x = 5; show(x); }");
         }
 
         @Test
         void ifWithoutElseDoesNotGuaranteeAssignment() {
             Diagnostic d = assertSingleDiagnostic(
-                    "void main() { int x; if (true) { x = 5; } print(x); }", ErrorPhase.SEMANTIC);
+                    "none main() { num x; if (yes) { x = 5; } show(x); }", ErrorPhase.SEMANTIC);
             assertTrue(d.message().contains("might not have been assigned"));
         }
 
         @Test
         void ifWithElseGuaranteesAssignment() {
-            assertNoDiagnostics("void main() { int x; if (true) { x = 5; } else { x = 6; } print(x); }");
+            assertNoDiagnostics("none main() { num x; if (yes) { x = 5; } else { x = 6; } show(x); }");
         }
 
         @Test
         void whileBodyAssignmentDoesNotPersistAfterLoop() {
             Diagnostic d = assertSingleDiagnostic(
-                    "void main() { int x; while (true) { x = 5; } print(x); }", ErrorPhase.SEMANTIC);
+                    "none main() { num x; loop (yes) { x = 5; } show(x); }", ErrorPhase.SEMANTIC);
             assertTrue(d.message().contains("might not have been assigned"));
         }
 
         @Test
         void readWithinWhileBodyAfterAssignmentIsFine() {
-            assertNoDiagnostics("void main() { int x = 0; while (x < 10) { x = x + 1; } print(x); }");
+            assertNoDiagnostics("none main() { num x = 0; loop (x < 10) { x = x + 1; } show(x); }");
         }
 
         @Test
         void parametersBeginAssigned() {
-            assertNoDiagnostics("void f(int a) { print(a); } void main() { }");
+            assertNoDiagnostics("none f(num a) { show(a); } none main() { }");
         }
 
         @Test
         void nestedBlockAssignmentPersistsUnconditionally() {
-            assertNoDiagnostics("void main() { int x; { x = 5; } print(x); }");
+            assertNoDiagnostics("none main() { num x; { x = 5; } show(x); }");
         }
 
         @Test
         void shadowedInnerAssignmentDoesNotSatisfyOuterRead() {
             List<Diagnostic> diagnostics =
-                    analyze("void main() { int x; { int x = 5; print(x); } print(x); }");
+                    analyze("none main() { num x; { num x = 5; show(x); } show(x); }");
             assertEquals(2, diagnostics.size());
             assertTrue(diagnostics.stream().anyMatch(d -> d.message().contains("shadows")));
             assertTrue(diagnostics.stream().anyMatch(d -> d.message().contains("might not have been assigned")));
@@ -323,18 +323,18 @@ class SemanticAnalyzerTest {
 
         @Test
         void undefinedVariableInBinaryExpressionProducesOnlyOneDiagnostic() {
-            List<Diagnostic> diagnostics = analyze("void main() { print(x + 5); }");
+            List<Diagnostic> diagnostics = analyze("none main() { show(x + 5); }");
             assertEquals(1, diagnostics.size());
             assertTrue(diagnostics.get(0).message().contains("undefined variable 'x'"));
         }
 
         @Test
         void undefinedCalleeArgumentPoisonsOnlyThatArgument() {
-            // x is undefined (1 diagnostic); the OTHER argument (true) is
+            // x is undefined (1 diagnostic); the OTHER argument (yes) is
             // independently wrong against add's second parameter (1 more) —
             // two genuinely independent problems, not a cascade from one.
             List<Diagnostic> diagnostics = analyze(
-                    "int add(int a, int b) { return a + b; } void main() { print(add(x, true)); }");
+                    "num add(num a, num b) { give a + b; } none main() { show(add(x, yes)); }");
             assertEquals(2, diagnostics.size());
         }
 
@@ -343,7 +343,7 @@ class SemanticAnalyzerTest {
             // y's initializer (undefined x) is poisoned, but y itself is
             // still declared INT and usable afterward with no second,
             // cascading diagnostic about y's own type.
-            List<Diagnostic> diagnostics = analyze("void main() { int y = x; print(y); }");
+            List<Diagnostic> diagnostics = analyze("none main() { num y = x; show(y); }");
             assertEquals(1, diagnostics.size());
             assertTrue(diagnostics.get(0).message().contains("undefined variable 'x'"));
         }
@@ -355,25 +355,25 @@ class SemanticAnalyzerTest {
         @Test
         void missingMainIsReported() {
             Diagnostic d = assertSingleDiagnostic(
-                    "int add(int a, int b) { return a + b; }", ErrorPhase.SEMANTIC);
+                    "num add(num a, num b) { give a + b; }", ErrorPhase.SEMANTIC);
             assertTrue(d.message().contains("no 'main' function"));
         }
 
         @Test
         void mainWithWrongReturnTypeIsRejected() {
-            Diagnostic d = assertSingleDiagnostic("int main() { return 1; }", ErrorPhase.SEMANTIC);
+            Diagnostic d = assertSingleDiagnostic("num main() { give 1; }", ErrorPhase.SEMANTIC);
             assertTrue(d.message().contains("'main' must have the signature"));
         }
 
         @Test
         void mainWithParametersIsRejected() {
-            Diagnostic d = assertSingleDiagnostic("void main(int argc) { }", ErrorPhase.SEMANTIC);
+            Diagnostic d = assertSingleDiagnostic("none main(num argc) { }", ErrorPhase.SEMANTIC);
             assertTrue(d.message().contains("'main' must have the signature"));
         }
 
         @Test
         void correctMainIsAccepted() {
-            assertNoDiagnostics("void main() { }");
+            assertNoDiagnostics("none main() { }");
         }
     }
 }
