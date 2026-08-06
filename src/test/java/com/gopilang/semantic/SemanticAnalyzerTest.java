@@ -484,8 +484,10 @@ class SemanticAnalyzerTest {
     // structTable — reusing registerFunctions()'s own duplicate-name pattern
     // exactly, and reusing Scope.define()'s existing duplicate-detection
     // mechanism for fields, exactly like function parameters already do.
-    // Structs are not yet usable as types anywhere (no struct-typed fields,
-    // variables, construction, or field access) — that's later milestones.
+    // Struct names now parse in type position as of Milestone S2 (see
+    // StructTypedDeclarations below), but are still rejected wherever they're
+    // actually used — no struct-typed fields, construction, or field access
+    // yet either.
     @Nested
     class Structs {
 
@@ -557,6 +559,56 @@ class SemanticAnalyzerTest {
             SemanticModel model = analyzeToModel(
                     "struct A { num x; } struct B { num y; } struct C { num z; } none main() { }");
             assertEquals(3, model.structTable().size());
+        }
+    }
+
+    // Milestone S2, v3: struct names now parse in type position (variable
+    // type, parameter type, return type — see ParserTest.StructTypedDeclarations),
+    // but structs are not yet integrated into the type system at all. This
+    // temporary stub rejects every such use immediately, with one diagnostic
+    // per occurrence, regardless of whether the named struct was ever
+    // actually declared — replaced by real type-system support in Milestone S3.
+    @Nested
+    class StructTypedDeclarations {
+
+        @Test
+        void structTypedVariableDeclarationIsRejected() {
+            Diagnostic d = assertSingleDiagnostic(
+                    "struct Point { num x; } none main() { Point p; }", ErrorPhase.TYPE);
+            assertTrue(d.message().contains("struct types are not supported yet"));
+        }
+
+        @Test
+        void structTypedParameterIsRejected() {
+            Diagnostic d = assertSingleDiagnostic(
+                    "struct Point { num x; } none takesPoint(Point p) { } none main() { }", ErrorPhase.TYPE);
+            assertTrue(d.message().contains("struct types are not supported yet"));
+        }
+
+        @Test
+        void structTypedReturnTypeIsRejected() {
+            // No return statement in the body: the placeholder return type
+            // is treated as 'none', so an empty body neither triggers a
+            // reachability diagnostic nor a "cannot return a value" one —
+            // isolating the assertion to exactly the one stub diagnostic
+            // this test is about.
+            Diagnostic d = assertSingleDiagnostic(
+                    "struct Point { num x; } Point makePoint() { } none main() { }", ErrorPhase.TYPE);
+            assertTrue(d.message().contains("struct types are not supported yet"));
+        }
+
+        @Test
+        void unresolvedStructNameUsedAsATypeIsAlsoRejected() {
+            // The stub rejects the shape (a struct name in type position),
+            // not a resolved reference to a real struct — "not supported
+            // yet" applies either way until S3 adds real resolution.
+            Diagnostic d = assertSingleDiagnostic("none main() { NotAStruct p; }", ErrorPhase.TYPE);
+            assertTrue(d.message().contains("struct types are not supported yet"));
+        }
+
+        @Test
+        void primitiveDeclarationsAreUnaffected() {
+            assertNoDiagnostics("struct Point { num x; } none main() { num p; }");
         }
     }
 }

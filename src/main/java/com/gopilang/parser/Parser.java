@@ -47,6 +47,15 @@ import java.util.Optional;
  */
 public final class Parser {
 
+    // Milestone S2: a struct name is now accepted in type position (return
+    // type, parameter type, variable type), but nothing beyond parsing is
+    // implemented yet — semantic analysis rejects every such use immediately
+    // (see SemanticAnalyzer). This placeholder fills the AST's still-required
+    // TypeRef slot for a struct-typed declaration; it is never a real type and
+    // must never be read for one, which is exactly what the immediate
+    // semantic rejection guarantees in practice.
+    private static final TypeRef STRUCT_TYPE_PLACEHOLDER = new TypeRef(PrimitiveType.VOID, false);
+
     private final List<Token> tokens;
     private final DiagnosticReporter reporter = new DiagnosticReporter();
     private int current = 0;
@@ -86,14 +95,15 @@ public final class Parser {
 
     private FunctionDeclaration parseFunction() {
         SourceLocation start = peek().location();
-        TypeRef returnType = parseType();
+        ParsedType returnType = parseDeclaredType();
         Token name = consume(TokenType.IDENTIFIER, "expected a function name");
         consume(TokenType.LEFT_PAREN, "expected '(' after function name");
         List<Parameter> parameters = parseParameters();
         consume(TokenType.RIGHT_PAREN, "expected ')' after parameters");
         BlockStatement body = parseBlock();
         SourceLocation end = previous().location();
-        return new FunctionDeclaration(returnType, name.lexeme(), parameters, body, new SourceRange(start, end));
+        return new FunctionDeclaration(returnType.type(), returnType.structTypeName(), name.lexeme(), parameters,
+                body, new SourceRange(start, end));
     }
 
     private List<Parameter> parseParameters() {
@@ -101,9 +111,10 @@ public final class Parser {
         if (!check(TokenType.RIGHT_PAREN)) {
             do {
                 SourceLocation paramStart = peek().location();
-                TypeRef type = parseType();
+                ParsedType type = parseDeclaredType();
                 Token name = consume(TokenType.IDENTIFIER, "expected a parameter name");
-                parameters.add(new Parameter(type, name.lexeme(), new SourceRange(paramStart, name.location())));
+                parameters.add(new Parameter(type.type(), type.structTypeName(), name.lexeme(),
+                        new SourceRange(paramStart, name.location())));
             } while (match(TokenType.COMMA));
         }
         return parameters;
@@ -138,12 +149,16 @@ public final class Parser {
         TypeRef type = parseType();
         Token name = consume(TokenType.IDENTIFIER, "expected a field name");
         Token semicolon = consume(TokenType.SEMICOLON, "expected ';' after field declaration");
-        return new Parameter(type, name.lexeme(), new SourceRange(start, semicolon.location()));
+        return new Parameter(type, Optional.empty(), name.lexeme(), new SourceRange(start, semicolon.location()));
     }
 
     // type ::= elementType ( "[" "]" )? — the bracket pair marks "array of
     // elementType"; it is a fixed, empty pair here (the SIZE only appears
-    // later, at array-creation time via "new elementType[size]").
+    // later, at array-creation time via "new elementType[size]"). Used
+    // directly by parseField() only — struct fields stay primitive-only
+    // (Milestone S2 does not allow a struct field to itself be a struct, or
+    // any other struct-typed field); every other type position goes through
+    // parseDeclaredType() instead.
     private TypeRef parseType() {
         PrimitiveType elementType = parseElementType();
         if (match(TokenType.LEFT_BRACKET)) {
@@ -151,6 +166,24 @@ public final class Parser {
             return new TypeRef(elementType, true);
         }
         return new TypeRef(elementType, false);
+    }
+
+    // declaredType ::= type | IDENTIFIER — the type production used for a
+    // function's return type, a parameter's type, and a variable's type
+    // (Milestone S2): a bare IDENTIFIER here is unambiguously a struct name,
+    // since the grammar already mandates a type at these positions (no
+    // lookahead is needed, unlike at statement-start — see
+    // isStructTypedDeclarationStart()). No array suffix is accepted after a
+    // struct name; arrays of structs are out of scope for this milestone.
+    private record ParsedType(TypeRef type, Optional<String> structTypeName) {
+    }
+
+    private ParsedType parseDeclaredType() {
+        if (check(TokenType.IDENTIFIER)) {
+            Token name = advance();
+            return new ParsedType(STRUCT_TYPE_PLACEHOLDER, Optional.of(name.lexeme()));
+        }
+        return new ParsedType(parseType(), Optional.empty());
     }
 
     private PrimitiveType parseElementType() {
@@ -187,22 +220,39 @@ public final class Parser {
         if (check(TokenType.KW_PRINT)) return parsePrintStatement();
         if (check(TokenType.LEFT_BRACE)) return parseBlock();
         if (check(TokenType.KW_INT) || check(TokenType.KW_FLOAT) || check(TokenType.KW_BOOL)
-                || check(TokenType.KW_STRING) || check(TokenType.KW_VOID)) {
+                || check(TokenType.KW_STRING) || check(TokenType.KW_VOID)
+                || isStructTypedDeclarationStart()) {
             return parseVariableDeclaration();
         }
         return parseExpressionStatement();
     }
 
+    // A statement starting with IDENTIFIER is ambiguous — "Point p;" (a
+    // struct-typed declaration), "p = 5;" (an assignment), and "foo();" (a
+    // call) all start the same way. Two IDENTIFIERs in a row is the only
+    // shape that means "declaration" (struct name, then variable name); a
+    // single token of lookahead beyond the current one, isolated to this
+    // check, is enough to tell them apart with no backtracking.
+    private boolean isStructTypedDeclarationStart() {
+        return check(TokenType.IDENTIFIER) && checkNext(TokenType.IDENTIFIER);
+    }
+
+    private boolean checkNext(TokenType type) {
+        int next = current + 1;
+        return next < tokens.size() && tokens.get(next).type() == type;
+    }
+
     private VariableDeclaration parseVariableDeclaration() {
         SourceLocation start = peek().location();
-        TypeRef type = parseType();
+        ParsedType type = parseDeclaredType();
         Token name = consume(TokenType.IDENTIFIER, "expected a variable name");
         Optional<Expr> initializer = Optional.empty();
         if (match(TokenType.ASSIGN)) {
             initializer = Optional.of(parseExpression());
         }
         Token semicolon = consume(TokenType.SEMICOLON, "expected ';' after variable declaration");
-        return new VariableDeclaration(type, name.lexeme(), initializer, new SourceRange(start, semicolon.location()));
+        return new VariableDeclaration(type.type(), type.structTypeName(), name.lexeme(), initializer,
+                new SourceRange(start, semicolon.location()));
     }
 
     private ReturnStatement parseReturnStatement() {
@@ -289,7 +339,8 @@ public final class Parser {
     // e.g. "i = 0") needs it consumed here instead.
     private Stmt parseForInit() {
         if (check(TokenType.KW_INT) || check(TokenType.KW_FLOAT) || check(TokenType.KW_BOOL)
-                || check(TokenType.KW_STRING) || check(TokenType.KW_VOID)) {
+                || check(TokenType.KW_STRING) || check(TokenType.KW_VOID)
+                || isStructTypedDeclarationStart()) {
             return parseVariableDeclaration();
         }
         SourceLocation start = peek().location();

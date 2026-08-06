@@ -24,9 +24,11 @@ import com.gopilang.ast.UnaryExpression;
 import com.gopilang.ast.VariableDeclaration;
 import com.gopilang.ast.VariableExpression;
 import com.gopilang.ast.WhileStatement;
+import com.gopilang.types.TypeRef;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * Renders a parsed {@link Program} as a Unicode tree, for the {@code --ast}
@@ -93,12 +95,21 @@ public final class AstPrinter {
             children.add(describe(parameter));
         }
         children.add(describe(function.body()));
-        String label = "FunctionDeclaration " + function.name() + "() -> " + function.returnType();
+        String label = "FunctionDeclaration " + function.name() + "() -> "
+                + typeLabel(function.returnType(), function.structReturnTypeName());
         return new TreeNode(label, children);
     }
 
     private static TreeNode describe(Parameter parameter) {
-        return TreeNode.leaf("Parameter " + parameter.type() + " " + parameter.name());
+        return TreeNode.leaf("Parameter " + typeLabel(parameter.type(), parameter.structTypeName())
+                + " " + parameter.name());
+    }
+
+    // Milestone S2: a struct-typed declaration's TypeRef is only a parser
+    // placeholder (see Parser.STRUCT_TYPE_PLACEHOLDER) — the struct name is
+    // what's actually meaningful to show, so it takes priority whenever present.
+    private static String typeLabel(TypeRef type, Optional<String> structTypeName) {
+        return structTypeName.orElseGet(type::toString);
     }
 
     private static TreeNode describe(Stmt stmt) {
@@ -113,7 +124,9 @@ public final class AstPrinter {
             case VariableDeclaration decl -> {
                 List<TreeNode> children = new ArrayList<>();
                 decl.initializer().ifPresent(init -> children.add(describe(init)));
-                yield new TreeNode("VariableDeclaration " + decl.type() + " " + decl.name(), children);
+                yield new TreeNode(
+                        "VariableDeclaration " + typeLabel(decl.type(), decl.structTypeName()) + " " + decl.name(),
+                        children);
             }
             case IfStatement ifStmt -> {
                 List<TreeNode> children = new ArrayList<>();

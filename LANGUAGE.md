@@ -112,12 +112,16 @@ There is no array-literal syntax (e.g. `[1, 2, 3]`) — every array is created w
 
 ## Structs
 
-**Status: declarations only.** A `struct` can be declared and its fields are checked for duplicates, but structs are **not yet usable anywhere else in the language** — this is the first of several milestones building up full struct support.
+**Status: declarations, plus struct names accepted as types syntactically — semantic analysis still rejects any actual use.** A `struct` can be declared and its fields are checked for duplicates. As of Milestone S2, a struct name may also be written wherever a variable type, parameter type, or return type is expected, and it parses successfully — but semantic analysis immediately rejects it with a temporary "struct types are not supported yet" diagnostic. This is deliberate: S2 is a parser-only milestone that clears the grammar's declaration-vs-expression ambiguity out of the way; real struct type-system support (resolution, assignability, construction) starts in Milestone S3.
 
 ```
 struct Point {
     num x;
     num y;
+}
+
+none main() {
+    Point p;   // parses; rejected by semantic analysis: "struct types are not supported yet"
 }
 ```
 
@@ -128,12 +132,13 @@ Currently supported:
 - Duplicate struct names are a compile-time error
 - Duplicate field names within one struct are a compile-time error (fields in *different* structs may share a name freely — each struct's fields are their own namespace)
 - A struct name may be reused as a function name with no conflict — structs and functions are resolved in separate contexts
+- A struct name parses as a variable type, parameter type, or return type (Milestone S2) — but is always rejected by semantic analysis with a temporary stub diagnostic; there is no working struct-typed declaration yet
 
 **Explicitly not yet supported** (planned for later milestones, not oversights):
-- A struct name cannot be used as a field type, parameter type, variable type, or return type
+- No actual struct-typed variable, parameter, or return value works yet — the temporary semantic stub rejects every one (Milestone S3 replaces this with real type-system integration)
 - There is no struct construction syntax (no `new Point(...)` yet)
 - There is no field access (`point.x`) or field assignment (`point.x = 5`) yet
-- A struct field cannot itself be another struct
+- A struct field cannot itself be another struct (field types stay primitive-only, unaffected by S2)
 
 ## Variables
 
@@ -298,19 +303,27 @@ program        ::= (functionDecl | structDecl)* EOF
 
 structDecl     ::= "struct" IDENTIFIER "{" field* "}"
 field          ::= type IDENTIFIER ";"                 // identical shape to `parameter` below
+                  // fields stay primitive-only (elementType) — no struct-typed fields (S2 scope)
 
-functionDecl   ::= type IDENTIFIER "(" parameters? ")" block
+functionDecl   ::= declaredType IDENTIFIER "(" parameters? ")" block
 parameters     ::= parameter ("," parameter)*
-parameter      ::= type IDENTIFIER
+parameter      ::= declaredType IDENTIFIER
+declaredType   ::= type | IDENTIFIER
+                  // IDENTIFIER = a struct name used as a type (Milestone S2); parses
+                  // successfully, but semantic analysis rejects it immediately with a
+                  // temporary "struct types are not supported yet" diagnostic until S3
 type           ::= elementType ( "[" "]" )?
 elementType    ::= "num" | "dec" | "flag" | "text" | "none"
-                  // NOT YET: a struct name — structs aren't usable as types anywhere yet
 
 block          ::= "{" statement* "}"
 statement      ::= variableDecl | ifStmt | whileStmt | forStmt | returnStmt
                   | printStmt | exprStmt | block
+                  // "IDENTIFIER IDENTIFIER" at statement start (e.g. "Point p") is what
+                  // distinguishes a struct-typed variableDecl from an exprStmt starting
+                  // with a plain identifier ("p = 5", "foo()") — see Parser.
+                  // isStructTypedDeclarationStart() for the one-token lookahead this needs
 
-variableDecl   ::= type IDENTIFIER ("=" expression)? ";"
+variableDecl   ::= declaredType IDENTIFIER ("=" expression)? ";"
 ifStmt         ::= "if" "(" expression ")" statement ("else" statement)?
 whileStmt      ::= "loop" "(" expression ")" statement
 // forStmt is not its own AST node - the parser desugars it directly into

@@ -41,6 +41,7 @@ com/gopilang/vm/VirtualMachine.class
 com/gopilang/semantic/StructSymbol.class
 com/gopilang/ast/ArrayAccessExpression.class
 com/gopilang/lexer/package-info.class
+com/gopilang/parser/Parser$ParsedType.class
 com/gopilang/ast/BlockStatement.class
 com/gopilang/ast/PrintStatement.class
 com/gopilang/ast/VariableDeclaration.class

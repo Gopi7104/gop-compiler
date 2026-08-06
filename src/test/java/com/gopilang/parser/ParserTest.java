@@ -609,6 +609,134 @@ class ParserTest {
         }
     }
 
+    // Milestone S2, v3: struct names are now accepted in type position
+    // (variable type, parameter type, return type) via the smallest lookahead
+    // needed to resolve the "Point p;" (declaration) vs "p = ...;"
+    // (assignment) vs "foo();" (call) ambiguity at statement start — see
+    // Parser.isStructTypedDeclarationStart(). Everything else about structs
+    // stays exactly as Milestone S1 left it (declaration-only; no
+    // construction, no field access) — a parsed struct-typed declaration is
+    // rejected by semantic analysis's temporary stub (see
+    // SemanticAnalyzerTest.StructTypedDeclarations), not by the parser.
+    @Nested
+    class StructTypedDeclarations {
+
+        @Test
+        void structTypedVariableDeclarationParses() {
+            assertEquals("""
+                    Program
+                    ├── StructDeclaration Point
+                    │   └── Parameter INT x
+                    └── FunctionDeclaration main() -> VOID
+                        └── BlockStatement
+                            └── VariableDeclaration Point p
+                    """, parseAndPrint("struct Point { num x; } none main() { Point p; }"));
+        }
+
+        @Test
+        void structTypedParameterParses() {
+            assertEquals("""
+                    Program
+                    ├── StructDeclaration Point
+                    │   └── Parameter INT x
+                    └── FunctionDeclaration takesPoint() -> VOID
+                        ├── Parameter Point p
+                        └── BlockStatement
+                    """, parseAndPrint("struct Point { num x; } none takesPoint(Point p) { }"));
+        }
+
+        @Test
+        void structTypedReturnTypeParses() {
+            assertEquals("""
+                    Program
+                    ├── StructDeclaration Point
+                    │   └── Parameter INT x
+                    └── FunctionDeclaration makePoint() -> Point
+                        └── BlockStatement
+                            └── ReturnStatement
+                                └── LiteralExpression 5 (INT)
+                    """, parseAndPrint("struct Point { num x; } Point makePoint() { give 5; }"));
+        }
+
+        @Test
+        void primitiveDeclarationsAreUnaffected() {
+            // Same shape as StatementParsing.variableDeclarationWithoutInitializer
+            // — re-asserted here as the direct "unchanged" counterpart to the
+            // new struct-typed case above.
+            assertEquals("""
+                    Program
+                    └── FunctionDeclaration main() -> VOID
+                        └── BlockStatement
+                            └── VariableDeclaration INT x
+                    """, parseAndPrint("none main() { num x; }"));
+        }
+
+        @Test
+        void assignmentStatementStillParsesAsAnExpressionStatement() {
+            assertEquals("""
+                    Program
+                    └── FunctionDeclaration main() -> VOID
+                        └── BlockStatement
+                            ├── VariableDeclaration INT p
+                            └── ExpressionStatement
+                                └── AssignmentExpression p =
+                                    └── LiteralExpression 5 (INT)
+                    """, parseAndPrint("none main() { num p; p = 5; }"));
+        }
+
+        @Test
+        void functionCallStatementStillParsesAsAnExpressionStatement() {
+            assertEquals("""
+                    Program
+                    └── FunctionDeclaration main() -> VOID
+                        └── BlockStatement
+                            └── ExpressionStatement
+                                └── FunctionCallExpression foo(0 args)
+                    """, parseAndPrint("none main() { foo(); }"));
+        }
+
+        @Test
+        void twoIdentifiersInARowParseAsAStructTypedDeclaration() {
+            // The exact ambiguity this milestone resolves: IDENTIFIER
+            // IDENTIFIER is the only shape that means "declaration".
+            assertEquals("""
+                    Program
+                    └── FunctionDeclaration main() -> VOID
+                        └── BlockStatement
+                            └── VariableDeclaration Point p
+                    """, parseAndPrint("none main() { Point p; }"));
+        }
+
+        @Test
+        void singleIdentifierFollowedByEqualsIsNotADeclaration() {
+            // "Point = 5;" is one identifier followed by '=', not two
+            // identifiers in a row — an ordinary assignment, exactly as if
+            // "Point" were any other already-declared variable name.
+            assertEquals("""
+                    Program
+                    └── FunctionDeclaration main() -> VOID
+                        └── BlockStatement
+                            ├── VariableDeclaration INT Point
+                            └── ExpressionStatement
+                                └── AssignmentExpression Point =
+                                    └── LiteralExpression 5 (INT)
+                    """, parseAndPrint("none main() { num Point; Point = 5; }"));
+        }
+
+        @Test
+        void singleIdentifierFollowedByLeftParenIsNotADeclaration() {
+            // "Point();" is one identifier followed by '(', not two
+            // identifiers in a row — an ordinary function call.
+            assertEquals("""
+                    Program
+                    └── FunctionDeclaration main() -> VOID
+                        └── BlockStatement
+                            └── ExpressionStatement
+                                └── FunctionCallExpression Point(0 args)
+                    """, parseAndPrint("none main() { Point(); }"));
+        }
+    }
+
     // Nested blocks matter because they exercise parseBlock() and
     // parseStatement() calling each other recursively — the mutual-recursion
     // structure that made these two methods impossible to compile/test in
@@ -718,12 +846,18 @@ class ParserTest {
         }
 
         @Test
-        void oldKeywordSpellingIsRejectedAsAType() {
+        void oldKeywordSpellingIsNowParsedAsAStructTypeName() {
             // "void" is retired by the v1.1 keyword migration — it now lexes
-            // as a plain identifier, which can't start a function declaration.
+            // as a plain identifier. Before Milestone S2 that made it a parse
+            // error here (no identifier was ever valid in type position); as
+            // of S2, any identifier in type position is read as a struct
+            // name, so this now parses as a function named "main" whose
+            // declared return type is the (nonexistent) struct "void" —
+            // rejected by semantic analysis's temporary struct-type stub
+            // (SemanticAnalyzerTest), not by the parser.
             Parser parser = new Parser(new Lexer("void main() { }").scanTokens());
             parser.parseProgram();
-            assertTrue(parser.reporter().hasErrors());
+            assertFalse(parser.reporter().hasErrors());
         }
     }
 }

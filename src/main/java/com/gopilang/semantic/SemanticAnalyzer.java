@@ -29,6 +29,7 @@ import com.gopilang.errors.DiagnosticReporter;
 import com.gopilang.errors.ErrorPhase;
 import com.gopilang.types.PrimitiveType;
 import com.gopilang.types.TypeRef;
+import com.gopilang.util.SourceRange;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -175,6 +176,11 @@ public final class SemanticAnalyzer {
     // so later, unrelated references aren't affected by the duplicate.
     private void registerFunctions() {
         for (FunctionDeclaration function : program.functions()) {
+            checkNotStructType(function.structReturnTypeName(), function.range());
+            for (Parameter parameter : function.parameters()) {
+                checkNotStructType(parameter.structTypeName(), parameter.range());
+            }
+
             FunctionSymbol symbol = new FunctionSymbol(
                     function.name(),
                     function.returnType(),
@@ -190,6 +196,20 @@ public final class SemanticAnalyzer {
                         "previous declaration was at " + existing.declaredAt()));
             }
         }
+    }
+
+    // Milestone S2: struct names now parse in type position (return type,
+    // parameter type, variable type), but structs are not yet integrated into
+    // the type system at all — this is the temporary stub that rejects every
+    // such use immediately, until Milestone S3 replaces it with real
+    // type-system support. One diagnostic per occurrence, reported where the
+    // type was written, exactly like every other type-position check here.
+    private void checkNotStructType(Optional<String> structTypeName, SourceRange range) {
+        structTypeName.ifPresent(name -> reporter.report(new Diagnostic(
+                ErrorPhase.TYPE,
+                range,
+                "struct types are not supported yet",
+                "'" + name + "' is a struct type; using a struct as a type is not implemented until a later milestone")));
     }
 
     // Pass 2: scope management and identifier resolution only — no type
@@ -281,6 +301,17 @@ public final class SemanticAnalyzer {
                 currentScope = enclosing; // leaving the scope: just stop using the child
             }
             case VariableDeclaration decl -> {
+                // Milestone S2 stub: a struct-typed declaration is rejected
+                // immediately and skips every other check below — decl.type()
+                // is only a placeholder for this declaration (see Parser's
+                // STRUCT_TYPE_PLACEHOLDER), so none of the normal
+                // initializer-compatibility or symbol-registration logic
+                // (which trusts decl.type() to be a real type) may run.
+                if (decl.structTypeName().isPresent()) {
+                    checkNotStructType(decl.structTypeName(), decl.range());
+                    return;
+                }
+
                 // Checked before insertion, deliberately — a variable's own
                 // initializer must not be able to see itself (num y = y + 1;
                 // sees an outer y, or is undefined; never "the y being
