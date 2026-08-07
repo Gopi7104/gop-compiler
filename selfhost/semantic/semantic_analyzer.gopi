@@ -1,0 +1,1201 @@
+// semantic_analyzer.gopi - Project 3, Phase 4: the self-hosted Semantic
+// Analyzer. A structural mirror of SemanticAnalyzer.java, translated into
+// GopiLang's data-oriented shape exactly the way parser.gopi translated
+// Parser.java:
+//   - SemanticState carries every field SemanticAnalyzer.java's instance
+//     fields hold (functionTable/structTable/currentScope/currentFunction/
+//     currentAssigned/the four resolution-and-type maps), passed explicitly
+//     to every function instead of an implicit `this`. Per the approved
+//     architecture revision, SemanticState also holds every field that is
+//     genuinely transient (scopes, currentScope, currentFunctionDeclNodeId,
+//     currentAssigned) - none of these appear on the final SemanticTables.
+//   - SemanticTables is the immutable output (mirrors SemanticModel): only
+//     functions, structs, the resolution/type columns, and diagnostics -
+//     built by lifting SemanticState's corresponding fields verbatim once
+//     analysis finishes, the same builder-then-freeze discipline
+//     CodeGenerator/AstArena already use.
+//   - A VariableSymbol's identity is simply the arena node id of its
+//     declaring VariableDeclaration or Parameter - that node already
+//     carries the declaration's own name, type, and range, so no separate
+//     symbol table is needed (see resolvedDeclByNode below). A
+//     FunctionSymbol/StructSymbol's identity is a dense row id in
+//     FunctionTable/StructTable (tables.gopi), each row itself carrying
+//     only a name and a declaration arena node id (see the approved
+//     revision's point 2).
+//   - Every per-AST-node result (a resolved declaration, a resolved
+//     function, a computed expression type) that Java stores in an
+//     IdentityHashMap<Expr,...> becomes, here, one more column parallel to
+//     the AstArena's own columns, indexed by the exact same dense arena
+//     node id - arena node ids already give free, dense identity, which is
+//     exactly what an IdentityHashMap exists to approximate for Java object
+//     references. Every such column is pre-sized to arenaNodeCount(arena)
+//     in one pass before analysis starts (the arena is already fully built
+//     and frozen by this point), with -1 (or "" for text) as the "absent/
+//     unset" sentinel - "absence = poison", exactly as SemanticAnalyzer.java
+//     never throws and instead leaves a map entry unpopulated.
+//   - GopiLang has no Optional. Every `Optional<TypeRef>` return in
+//     typeOf()/checkExpr() becomes a `flag` success return plus an
+//     out-parameter TypeSlots (the exact struct already defined in
+//     parser.gopi and reused verbatim here, not redefined - see
+//     typeOfFailed()/recordType() below), continuing the same
+//     out-parameter idiom parseDeclaredType() already established.
+//   - Definite assignment: currentAssigned is a dense 0/1 flag VectorNum,
+//     one slot per arena node id, indexed directly by the declaring node's
+//     id - O(1) test/set, replacing IdentityHashMap<VariableSymbol,...>-
+//     backed Set<VariableSymbol> with a flat array indexed by the same
+//     identity (arena node id) this whole port already standardizes on.
+//     Copy/intersect for if/else branch merging become vectorNumCopy()
+//     (reused verbatim from frozen BRL) and a plain elementwise AND.
+
+// ---------------------------------------------------------------------
+// SemanticState / SemanticTables
+// ---------------------------------------------------------------------
+
+struct SemanticState {
+    AstArena arena;
+    num programNodeId;
+    FunctionTable functions;
+    StructTable structs;
+    ScopeChain scopes;
+    num currentScope;               // -1 outside any function
+    num currentFunctionDeclNodeId;  // -1 outside any function
+    VectorNum currentAssigned;      // dense 0/1 flags, indexed by declaring arena node id
+    VectorNum resolvedDeclByNode;       // arena node id -> declaring decl's arena node id, or -1
+    VectorNum resolvedFunctionByNode;   // FunctionCallExpression node id -> FunctionTable row id, or -1
+    VectorNum typeElemByNode;
+    VectorNum typeIsArrayByNode;
+    VectorText typeStructNameByNode;
+    DiagnosticBuffer diagnostics;
+}
+
+struct SemanticTables {
+    FunctionTable functions;
+    StructTable structs;
+    VectorNum resolvedDeclByNode;
+    VectorNum resolvedFunctionByNode;
+    VectorNum typeElemByNode;
+    VectorNum typeIsArrayByNode;
+    VectorText typeStructNameByNode;
+    DiagnosticBuffer diagnostics;
+}
+
+VectorNum filledVectorNum(num n, num value) {
+    VectorNum v = vectorNumCreate();
+    num i = 0;
+    loop (i < n) {
+        vectorNumPush(v, value);
+        i = i + 1;
+    }
+    give v;
+}
+
+VectorText filledVectorText(num n, text value) {
+    VectorText v = vectorTextCreate();
+    num i = 0;
+    loop (i < n) {
+        vectorTextPush(v, value);
+        i = i + 1;
+    }
+    give v;
+}
+
+SemanticState semanticStateCreate(AstArena arena, num programNodeId, DiagnosticBuffer diagnostics) {
+    num n = arenaNodeCount(arena);
+    give new SemanticState(
+            arena, programNodeId,
+            functionTableCreate(), structTableCreate(),
+            scopeChainCreate(), -1, -1,
+            vectorNumCreate(),
+            filledVectorNum(n, -1), filledVectorNum(n, -1),
+            filledVectorNum(n, -1), filledVectorNum(n, 0), filledVectorText(n, ""),
+            diagnostics);
+}
+
+// ---------------------------------------------------------------------
+// Range-position helper: the declaring arena node's own range, rendered
+// through rangeToText() (type_rules.gopi) - mirrors every
+// `"previous declaration was at " + existing.declaredAt()` /
+// `"enclosing declaration was at " + shadowed.get().declaredAt()`
+// suggestion in SemanticAnalyzer.java, since a VariableSymbol's
+// declaredAt() is always exactly that declaring node's own range
+// (field.range() / parameter.range() / decl.range()).
+// ---------------------------------------------------------------------
+
+text nodeRangeText(AstArena a, num nodeId) {
+    give rangeToText(arenaStartLine(a, nodeId), arenaStartCol(a, nodeId), arenaEndLine(a, nodeId), arenaEndCol(a, nodeId));
+}
+
+// ---------------------------------------------------------------------
+// resolveDeclaredType - reports "undefined struct 'X'" wherever a declared
+// type names a struct that was never declared. Two distinct callers need
+// two distinct sources for the struct name: a "declared type" position
+// (field/parameter/return-type/variable-declaration) reads it from the
+// node's own typeStructName column, while NewStructExpression stores its
+// struct name in text0 instead (see ast_arena.gopi's column-reuse table) -
+// so the actual diagnostic logic lives in one shared helper taking the name
+// and position directly, and each caller supplies those from wherever its
+// own node shape keeps them.
+// ---------------------------------------------------------------------
+
+none reportUndefinedStructIfNeeded(SemanticState state, text structName, num line, num col) {
+    if (!(structName == "")) {
+        if (!hashMapContains(state.structs.byName, structName)) {
+            diagnosticBufferAppend(state.diagnostics, "Semantic Error", line, col,
+                    "undefined struct '" + structName + "'",
+                    "declare 'struct " + structName + " { ... }' before using it as a type");
+        }
+    }
+}
+
+// For a node whose OWN typeStructName column holds a declared type (field,
+// parameter, function return type, variable declaration) - position is
+// that same node's own start.
+none resolveDeclaredTypeAtNode(SemanticState state, num nodeId) {
+    reportUndefinedStructIfNeeded(state, arenaTypeStructName(state.arena, nodeId),
+            arenaStartLine(state.arena, nodeId), arenaStartCol(state.arena, nodeId));
+}
+
+// ---------------------------------------------------------------------
+// registerStructs - Pass 1a. Three sub-passes over program.structs(),
+// exactly as registerStructs() in Java: (1) register every struct's name
+// and detect duplicate field names within each struct via a throwaway
+// name->node map, (2) resolve every field's own declared type, (3) detect
+// cyclic struct containment. Sub-passes 2 and 3 need the COMPLETE
+// structTable, so neither can run interleaved with sub-pass 1.
+// ---------------------------------------------------------------------
+
+none registerStructForDuplicateFields(SemanticState state, num structDeclNodeId) {
+    HashMapTextToNum seenFields = hashMapCreate();
+    num fieldCount = arenaListCount(state.arena, structDeclNodeId);
+    num i = 0;
+    loop (i < fieldCount) {
+        num fieldNodeId = arenaListAt(state.arena, structDeclNodeId, i);
+        text fieldName = arenaText0(state.arena, fieldNodeId);
+        if (hashMapContains(seenFields, fieldName)) {
+            num existingFieldNodeId = hashMapGet(seenFields, fieldName);
+            diagnosticBufferAppend(state.diagnostics, "Semantic Error",
+                    arenaStartLine(state.arena, fieldNodeId), arenaStartCol(state.arena, fieldNodeId),
+                    "field '" + fieldName + "' is already declared",
+                    "previous declaration was at " + nodeRangeText(state.arena, existingFieldNodeId));
+        } else {
+            hashMapPut(seenFields, fieldName, fieldNodeId);
+        }
+        i = i + 1;
+    }
+}
+
+none detectStructCycles(SemanticState state) {
+    num n = state.structs.names.count;
+    VectorNum seen = filledVectorNum(n, 0);
+    num i = 0;
+    loop (i < n) {
+        if (seen.items[i] == 0) {
+            VectorNum onPath = filledVectorNum(n, 0);
+            visitForCycle(state, i, seen, onPath);
+        }
+        i = i + 1;
+    }
+}
+
+// Standard DFS: seen (permanently processed - a struct reachable from more
+// than one root is never re-explored/misreported) and onPath (the current
+// recursion stack - a back edge into this set is the cycle). An array field
+// is a runtime reference, never a containment edge; a primitive field has
+// no edge at all. One diagnostic per back edge, reported at the field that
+// creates it.
+none visitForCycle(SemanticState state, num structRow, VectorNum seen, VectorNum onPath) {
+    seen.items[structRow] = 1;
+    onPath.items[structRow] = 1;
+    num declNodeId = state.structs.declNodeIds.items[structRow];
+    num fieldCount = arenaListCount(state.arena, declNodeId);
+    num i = 0;
+    loop (i < fieldCount) {
+        num fieldNodeId = arenaListAt(state.arena, declNodeId, i);
+        num fieldIsArray = arenaTypeIsArray(state.arena, fieldNodeId);
+        text fieldStructName = arenaTypeStructName(state.arena, fieldNodeId);
+        if (fieldIsArray == 1 || fieldStructName == "") {
+            // array field: no containment edge. primitive field: no edge at all.
+        } else {
+            num referencedRow = structTableLookupRow(state.structs, fieldStructName);
+            if (referencedRow == -1) {
+                // undefined struct, already reported by resolveDeclaredTypeAtNode
+            } else if (onPath.items[referencedRow] == 1) {
+                text fieldName = arenaText0(state.arena, fieldNodeId);
+                text structName = state.structs.names.items[structRow];
+                diagnosticBufferAppend(state.diagnostics, "Semantic Error",
+                        arenaStartLine(state.arena, fieldNodeId), arenaStartCol(state.arena, fieldNodeId),
+                        "struct '" + structName + "' cannot contain itself (directly or indirectly) via field '" + fieldName + "'",
+                        "'" + fieldName + "' has type '" + fieldStructName + "', which (directly or indirectly) contains '" + structName + "' again");
+            } else if (seen.items[referencedRow] == 0) {
+                visitForCycle(state, referencedRow, seen, onPath);
+            }
+        }
+        i = i + 1;
+    }
+    onPath.items[structRow] = 0;
+}
+
+none registerStructs(SemanticState state) {
+    num structCount = arenaList2Count(state.arena, state.programNodeId);
+    num i = 0;
+    loop (i < structCount) {
+        num structNodeId = arenaList2At(state.arena, state.programNodeId, i);
+        registerStructForDuplicateFields(state, structNodeId);
+        text name = arenaText0(state.arena, structNodeId);
+        num existingRow = structTableLookupRow(state.structs, name);
+        if (existingRow == -1) {
+            structTableInsert(state.structs, name, structNodeId);
+        } else {
+            num existingDeclNodeId = state.structs.declNodeIds.items[existingRow];
+            diagnosticBufferAppend(state.diagnostics, "Semantic Error",
+                    arenaStartLine(state.arena, structNodeId), arenaStartCol(state.arena, structNodeId),
+                    "struct '" + name + "' is already declared",
+                    "previous declaration was at " + nodeRangeText(state.arena, existingDeclNodeId));
+        }
+        i = i + 1;
+    }
+
+    num j = 0;
+    loop (j < structCount) {
+        num structNodeId2 = arenaList2At(state.arena, state.programNodeId, j);
+        num fieldCount = arenaListCount(state.arena, structNodeId2);
+        num k = 0;
+        loop (k < fieldCount) {
+            resolveDeclaredTypeAtNode(state, arenaListAt(state.arena, structNodeId2, k));
+            k = k + 1;
+        }
+        j = j + 1;
+    }
+
+    detectStructCycles(state);
+}
+
+// ---------------------------------------------------------------------
+// registerFunctions - Pass 1b. Register every function's signature before
+// analyzing any body, so forward references and mutual recursion resolve
+// correctly. Duplicate names (including a name colliding with an
+// already-registered builtin) are reported, not thrown - the first
+// declaration stays authoritative.
+// ---------------------------------------------------------------------
+
+none registerFunctions(SemanticState state) {
+    num functionCount = arenaListCount(state.arena, state.programNodeId);
+    num i = 0;
+    loop (i < functionCount) {
+        num functionNodeId = arenaListAt(state.arena, state.programNodeId, i);
+        resolveDeclaredTypeAtNode(state, functionNodeId);
+        num paramCount = arenaListCount(state.arena, functionNodeId);
+        num p = 0;
+        loop (p < paramCount) {
+            resolveDeclaredTypeAtNode(state, arenaListAt(state.arena, functionNodeId, p));
+            p = p + 1;
+        }
+
+        text name = arenaText0(state.arena, functionNodeId);
+        num existingRow = functionTableLookupRow(state.functions, name);
+        if (existingRow == -1) {
+            functionTableInsert(state.functions, name, functionNodeId);
+        } else {
+            num existingDeclNodeId = state.functions.declNodeIds.items[existingRow];
+            diagnosticBufferAppend(state.diagnostics, "Semantic Error",
+                    arenaStartLine(state.arena, functionNodeId), arenaStartCol(state.arena, functionNodeId),
+                    "function '" + name + "' is already declared",
+                    "previous declaration was at " + functionDeclaredAtText(state.arena, existingDeclNodeId));
+        }
+        i = i + 1;
+    }
+}
+
+// ---------------------------------------------------------------------
+// validateMainFunction - whole-program check, run once after every
+// function has been analyzed.
+// ---------------------------------------------------------------------
+
+none validateMainFunction(SemanticState state) {
+    num mainRow = functionTableLookupRow(state.functions, "main");
+    if (mainRow == -1) {
+        diagnosticBufferAppend(state.diagnostics, "Semantic Error",
+                arenaStartLine(state.arena, state.programNodeId), arenaStartCol(state.arena, state.programNodeId),
+                "program has no 'main' function",
+                "add a 'none main()' function as the program's entry point");
+    } else {
+        num declNodeId = state.functions.declNodeIds.items[mainRow];
+        num returnElem = functionReturnElem(state.arena, declNodeId);
+        num returnIsArray = functionReturnIsArray(state.arena, declNodeId);
+        num paramCount = functionParamCount(state.arena, declNodeId);
+        flag isVoidReturn = returnIsArray == 0 && returnElem == primTypeVoid();
+        if (!isVoidReturn || paramCount != 0) {
+            diagnosticBufferAppend(state.diagnostics, "Semantic Error",
+                    functionDeclaredLine(state.arena, declNodeId), functionDeclaredCol(state.arena, declNodeId),
+                    "'main' must have the signature 'none main()'",
+                    "found return type '" + typeDisplayName(returnElem, returnIsArray, functionReturnStructName(state.arena, declNodeId))
+                            + "' with " + numToText(paramCount) + " parameter(s)");
+        }
+    }
+}
+
+// ---------------------------------------------------------------------
+// Definite-assignment flag-array helpers (see the header comment on
+// SemanticState for why this replaces IdentityHashMap-backed
+// Set<VariableSymbol>).
+// ---------------------------------------------------------------------
+
+flag assignedFlagsGet(VectorNum flags, num declNodeId) {
+    give flags.items[declNodeId] == 1;
+}
+
+none assignedFlagsSet(VectorNum flags, num declNodeId) {
+    flags.items[declNodeId] = 1;
+}
+
+VectorNum assignedFlagsIntersect(VectorNum a, VectorNum b) {
+    VectorNum result = vectorNumCreate();
+    num i = 0;
+    loop (i < a.count) {
+        num v = 0;
+        if (a.items[i] == 1 && b.items[i] == 1) {
+            v = 1;
+        }
+        vectorNumPush(result, v);
+        i = i + 1;
+    }
+    give result;
+}
+
+// ---------------------------------------------------------------------
+// Reachability - structural only, no CFG, no unreachable-code detection, no
+// loop-bound reasoning beyond a literal `true`/`yes` condition. Direct port
+// of returnsOnAllPaths(Stmt)/isLiteralTrue(Expr).
+// ---------------------------------------------------------------------
+
+flag isLiteralTrueNode(SemanticState state, num exprNodeId) {
+    if (arenaKind(state.arena, exprNodeId) != nodeKindLiteralExpression()) {
+        give no;
+    }
+    if (arenaTypeElem(state.arena, exprNodeId) != primTypeBool()) {
+        give no;
+    }
+    give arenaChild1(state.arena, exprNodeId) == 1;
+}
+
+flag returnsOnAllPaths(SemanticState state, num stmtNodeId) {
+    num kind = arenaKind(state.arena, stmtNodeId);
+    if (kind == nodeKindBlockStatement()) {
+        num stmtCount = arenaListCount(state.arena, stmtNodeId);
+        num i = 0;
+        flag any = no;
+        loop (i < stmtCount) {
+            if (returnsOnAllPaths(state, arenaListAt(state.arena, stmtNodeId, i))) {
+                any = yes;
+            }
+            i = i + 1;
+        }
+        give any;
+    }
+    if (kind == nodeKindIfStatement()) {
+        num elseNodeId = arenaChild3(state.arena, stmtNodeId);
+        if (elseNodeId == -1) {
+            give no;
+        }
+        give returnsOnAllPaths(state, arenaChild2(state.arena, stmtNodeId)) && returnsOnAllPaths(state, elseNodeId);
+    }
+    if (kind == nodeKindWhileStatement()) {
+        if (!isLiteralTrueNode(state, arenaChild1(state.arena, stmtNodeId))) {
+            give no;
+        }
+        give returnsOnAllPaths(state, arenaChild2(state.arena, stmtNodeId));
+    }
+    if (kind == nodeKindReturnStatement()) {
+        give yes;
+    }
+    // VariableDeclaration, PrintStatement, ExpressionStatement
+    give no;
+}
+
+// ---------------------------------------------------------------------
+// TypeSlots-out-parameter helpers.
+// ---------------------------------------------------------------------
+
+flag typeOfFailed(TypeSlots out) {
+    out.elem = -1;
+    out.isArray = 0;
+    out.structName = "";
+    give no;
+}
+
+flag recordType(SemanticState state, num exprNodeId, num elem, num isArray, text structName, TypeSlots out) {
+    state.typeElemByNode.items[exprNodeId] = elem;
+    state.typeIsArrayByNode.items[exprNodeId] = isArray;
+    state.typeStructNameByNode.items[exprNodeId] = structName;
+    out.elem = elem;
+    out.isArray = isArray;
+    out.structName = structName;
+    give yes;
+}
+
+num boolToNum(flag f) {
+    if (f) {
+        give 1;
+    }
+    give 0;
+}
+
+// resolveField - reused by both FieldAccessExpression and
+// FieldAssignmentExpression, mirroring resolveField(StructSymbol,String,
+// SourceRange) exactly: a linear scan over the struct's own fields, no
+// caching, stopping at the first match.
+num resolveFieldNode(SemanticState state, num structDeclNodeId, text fieldName, num line, num col) {
+    num fieldCount = arenaListCount(state.arena, structDeclNodeId);
+    num i = 0;
+    num found = -1;
+    loop (i < fieldCount && found == -1) {
+        num fieldNodeId = arenaListAt(state.arena, structDeclNodeId, i);
+        if (arenaText0(state.arena, fieldNodeId) == fieldName) {
+            found = fieldNodeId;
+        }
+        i = i + 1;
+    }
+    if (found == -1) {
+        text structName = arenaText0(state.arena, structDeclNodeId);
+        diagnosticBufferAppend(state.diagnostics, "Semantic Error", line, col,
+                "struct '" + structName + "' has no field '" + fieldName + "'", "");
+    }
+    give found;
+}
+
+// ---------------------------------------------------------------------
+// analyzeExpr - resolution only (populates resolvedDeclByNode/
+// resolvedFunctionByNode), no typing. Direct port of analyzeExpr(Expr)'s
+// switch.
+// ---------------------------------------------------------------------
+
+none analyzeExpr(SemanticState state, num exprNodeId) {
+    num kind = arenaKind(state.arena, exprNodeId);
+    if (kind == nodeKindLiteralExpression()) {
+        // no-op
+    } else if (kind == nodeKindVariableExpression()) {
+        text name = arenaText0(state.arena, exprNodeId);
+        num declNodeId = scopeResolve(state.scopes, state.currentScope, name);
+        if (declNodeId != -1) {
+            state.resolvedDeclByNode.items[exprNodeId] = declNodeId;
+            // Only checked once resolution succeeded - an undefined variable
+            // already gets its own diagnostic below; it must not also be
+            // reported as "unassigned" (poison propagation).
+            if (!assignedFlagsGet(state.currentAssigned, declNodeId)) {
+                diagnosticBufferAppend(state.diagnostics, "Semantic Error",
+                        arenaStartLine(state.arena, exprNodeId), arenaStartCol(state.arena, exprNodeId),
+                        "variable '" + name + "' might not have been assigned a value", "");
+            }
+        } else {
+            diagnosticBufferAppend(state.diagnostics, "Semantic Error",
+                    arenaStartLine(state.arena, exprNodeId), arenaStartCol(state.arena, exprNodeId),
+                    "undefined variable '" + name + "'", "");
+        }
+    } else if (kind == nodeKindGroupingExpression()) {
+        analyzeExpr(state, arenaChild1(state.arena, exprNodeId));
+    } else if (kind == nodeKindUnaryExpression()) {
+        analyzeExpr(state, arenaChild1(state.arena, exprNodeId));
+    } else if (kind == nodeKindBinaryExpression()) {
+        analyzeExpr(state, arenaChild1(state.arena, exprNodeId));
+        analyzeExpr(state, arenaChild2(state.arena, exprNodeId));
+    } else if (kind == nodeKindAssignmentExpression()) {
+        analyzeExpr(state, arenaChild1(state.arena, exprNodeId));
+        text targetName = arenaText0(state.arena, exprNodeId);
+        num declNodeId = scopeResolve(state.scopes, state.currentScope, targetName);
+        if (declNodeId != -1) {
+            state.resolvedDeclByNode.items[exprNodeId] = declNodeId;
+            // Marked assigned regardless of the value's own type
+            // compatibility - definite assignment tracks whether a value
+            // was given, not whether that value type-checked.
+            assignedFlagsSet(state.currentAssigned, declNodeId);
+        } else {
+            diagnosticBufferAppend(state.diagnostics, "Semantic Error",
+                    arenaStartLine(state.arena, exprNodeId), arenaStartCol(state.arena, exprNodeId),
+                    "undefined variable '" + targetName + "'", "");
+        }
+    } else if (kind == nodeKindFunctionCallExpression()) {
+        num argCount = arenaListCount(state.arena, exprNodeId);
+        num i = 0;
+        loop (i < argCount) {
+            analyzeExpr(state, arenaListAt(state.arena, exprNodeId, i));
+            i = i + 1;
+        }
+        text calleeName = arenaText0(state.arena, exprNodeId);
+        num functionRow = functionTableLookupRow(state.functions, calleeName);
+        if (functionRow != -1) {
+            state.resolvedFunctionByNode.items[exprNodeId] = functionRow;
+        } else {
+            diagnosticBufferAppend(state.diagnostics, "Semantic Error",
+                    arenaStartLine(state.arena, exprNodeId), arenaStartCol(state.arena, exprNodeId),
+                    "undefined function '" + calleeName + "'", "");
+        }
+    } else if (kind == nodeKindNewArrayExpression()) {
+        analyzeExpr(state, arenaChild1(state.arena, exprNodeId));
+    } else if (kind == nodeKindArrayAccessExpression()) {
+        analyzeExpr(state, arenaChild1(state.arena, exprNodeId));
+        analyzeExpr(state, arenaChild2(state.arena, exprNodeId));
+    } else if (kind == nodeKindArrayLengthExpression()) {
+        analyzeExpr(state, arenaChild1(state.arena, exprNodeId));
+    } else if (kind == nodeKindIndexAssignmentExpression()) {
+        // The array reference itself is read here (which array is being
+        // mutated), not reassigned - its own definite-assignment check
+        // happens naturally via the ordinary VariableExpression case above.
+        analyzeExpr(state, arenaChild1(state.arena, exprNodeId));
+        analyzeExpr(state, arenaChild2(state.arena, exprNodeId));
+        analyzeExpr(state, arenaChild3(state.arena, exprNodeId));
+    } else if (kind == nodeKindNewStructExpression()) {
+        num argCount = arenaListCount(state.arena, exprNodeId);
+        num i = 0;
+        loop (i < argCount) {
+            analyzeExpr(state, arenaListAt(state.arena, exprNodeId, i));
+            i = i + 1;
+        }
+        // Reuses the exact same "undefined struct" check/diagnostic already
+        // used for a variable/parameter/return/field type.
+        reportUndefinedStructIfNeeded(state, arenaText0(state.arena, exprNodeId),
+                arenaStartLine(state.arena, exprNodeId), arenaStartCol(state.arena, exprNodeId));
+    } else if (kind == nodeKindFieldAccessExpression()) {
+        analyzeExpr(state, arenaChild1(state.arena, exprNodeId));
+    } else {
+        // FieldAssignmentExpression
+        analyzeExpr(state, arenaChild1(state.arena, exprNodeId));
+        analyzeExpr(state, arenaChild2(state.arena, exprNodeId));
+    }
+}
+
+// ---------------------------------------------------------------------
+// typeOf - recursive, bottom-up expression typing. Reads
+// resolvedDeclByNode/resolvedFunctionByNode (already populated by
+// analyzeExpr's own resolution walk) but never writes to them; its only
+// side effect is populating typeElemByNode/typeIsArrayByNode/
+// typeStructNameByNode via recordType(). Direct port of typeOf(Expr)'s
+// switch - every "compute both/all operands even if one already failed"
+// pattern from the Java source is preserved exactly, not short-circuited.
+// ---------------------------------------------------------------------
+
+flag typeOf(SemanticState state, num exprNodeId, TypeSlots out) {
+    num kind = arenaKind(state.arena, exprNodeId);
+
+    if (kind == nodeKindLiteralExpression()) {
+        give recordType(state, exprNodeId, arenaTypeElem(state.arena, exprNodeId), 0, "", out);
+    }
+
+    if (kind == nodeKindVariableExpression()) {
+        num declNodeId = state.resolvedDeclByNode.items[exprNodeId];
+        if (declNodeId == -1) {
+            give typeOfFailed(out);
+        }
+        give recordType(state, exprNodeId, arenaTypeElem(state.arena, declNodeId),
+                arenaTypeIsArray(state.arena, declNodeId), arenaTypeStructName(state.arena, declNodeId), out);
+    }
+
+    if (kind == nodeKindGroupingExpression()) {
+        TypeSlots inner = typeSlotsCreate();
+        flag ok = typeOf(state, arenaChild1(state.arena, exprNodeId), inner);
+        if (!ok) {
+            give typeOfFailed(out);
+        }
+        give recordType(state, exprNodeId, inner.elem, inner.isArray, inner.structName, out);
+    }
+
+    if (kind == nodeKindUnaryExpression()) {
+        TypeSlots operand = typeSlotsCreate();
+        flag ok = typeOf(state, arenaChild1(state.arena, exprNodeId), operand);
+        if (!ok) {
+            give typeOfFailed(out);
+        }
+        num op = arenaOperator(state.arena, exprNodeId);
+        if (operand.isArray == 1 || !(operand.structName == "")) {
+            diagnosticBufferAppend(state.diagnostics, "Type Error",
+                    arenaStartLine(state.arena, exprNodeId), arenaStartCol(state.arena, exprNodeId),
+                    "operator '" + unaryOpSymbol(op) + "' cannot be applied to '"
+                            + typeDisplayName(operand.elem, operand.isArray, operand.structName) + "'", "");
+            give typeOfFailed(out);
+        }
+        num result = typeRulesResultOfUnary(op, operand.elem);
+        if (result == -1) {
+            diagnosticBufferAppend(state.diagnostics, "Type Error",
+                    arenaStartLine(state.arena, exprNodeId), arenaStartCol(state.arena, exprNodeId),
+                    "operator '" + unaryOpSymbol(op) + "' cannot be applied to '"
+                            + typeDisplayName(operand.elem, operand.isArray, operand.structName) + "'", "");
+            give typeOfFailed(out);
+        }
+        give recordType(state, exprNodeId, result, 0, "", out);
+    }
+
+    if (kind == nodeKindBinaryExpression()) {
+        TypeSlots left = typeSlotsCreate();
+        TypeSlots right = typeSlotsCreate();
+        flag leftOk = typeOf(state, arenaChild1(state.arena, exprNodeId), left);
+        flag rightOk = typeOf(state, arenaChild2(state.arena, exprNodeId), right);
+        if (!leftOk || !rightOk) {
+            give typeOfFailed(out);
+        }
+        num op = arenaOperator(state.arena, exprNodeId);
+        if (left.isArray == 1 || right.isArray == 1 || !(left.structName == "") || !(right.structName == "")) {
+            diagnosticBufferAppend(state.diagnostics, "Type Error",
+                    arenaStartLine(state.arena, exprNodeId), arenaStartCol(state.arena, exprNodeId),
+                    "operator '" + binaryOpSymbol(op) + "' cannot be applied to '"
+                            + typeDisplayName(left.elem, left.isArray, left.structName) + "' and '"
+                            + typeDisplayName(right.elem, right.isArray, right.structName) + "'", "");
+            give typeOfFailed(out);
+        }
+        num result = typeRulesResultOfBinary(left.elem, op, right.elem);
+        if (result == -1) {
+            diagnosticBufferAppend(state.diagnostics, "Type Error",
+                    arenaStartLine(state.arena, exprNodeId), arenaStartCol(state.arena, exprNodeId),
+                    "operator '" + binaryOpSymbol(op) + "' cannot be applied to '"
+                            + typeDisplayName(left.elem, left.isArray, left.structName) + "' and '"
+                            + typeDisplayName(right.elem, right.isArray, right.structName) + "'", "");
+            give typeOfFailed(out);
+        }
+        give recordType(state, exprNodeId, result, 0, "", out);
+    }
+
+    if (kind == nodeKindAssignmentExpression()) {
+        TypeSlots value = typeSlotsCreate();
+        flag valueOk = typeOf(state, arenaChild1(state.arena, exprNodeId), value);
+        num declNodeId = state.resolvedDeclByNode.items[exprNodeId];
+        if (declNodeId == -1 || !valueOk) {
+            give typeOfFailed(out);
+        }
+        num targetElem = arenaTypeElem(state.arena, declNodeId);
+        num targetIsArray = arenaTypeIsArray(state.arena, declNodeId);
+        text targetStructName = arenaTypeStructName(state.arena, declNodeId);
+        if (!typeRulesIsAssignable(value.elem, value.isArray, value.structName, targetElem, targetIsArray, targetStructName)) {
+            diagnosticBufferAppend(state.diagnostics, "Type Error",
+                    arenaStartLine(state.arena, exprNodeId), arenaStartCol(state.arena, exprNodeId),
+                    "cannot assign '" + typeDisplayName(value.elem, value.isArray, value.structName)
+                            + "' to variable of type '" + typeDisplayName(targetElem, targetIsArray, targetStructName) + "'", "");
+            give typeOfFailed(out);
+        }
+        give recordType(state, exprNodeId, targetElem, targetIsArray, targetStructName, out);
+    }
+
+    if (kind == nodeKindFunctionCallExpression()) {
+        num argCount = arenaListCount(state.arena, exprNodeId);
+        VectorNum argOks = vectorNumCreate();
+        VectorNum argElems = vectorNumCreate();
+        VectorNum argIsArrays = vectorNumCreate();
+        VectorText argStructNames = vectorTextCreate();
+        num a = 0;
+        loop (a < argCount) {
+            TypeSlots argType = typeSlotsCreate();
+            flag ok = typeOf(state, arenaListAt(state.arena, exprNodeId, a), argType);
+            vectorNumPush(argOks, boolToNum(ok));
+            vectorNumPush(argElems, argType.elem);
+            vectorNumPush(argIsArrays, argType.isArray);
+            vectorTextPush(argStructNames, argType.structName);
+            a = a + 1;
+        }
+
+        num functionRow = state.resolvedFunctionByNode.items[exprNodeId];
+        if (functionRow == -1) {
+            give typeOfFailed(out);
+        }
+        num declNodeId = state.functions.declNodeIds.items[functionRow];
+        num paramCount = functionParamCount(state.arena, declNodeId);
+        text calleeName = arenaText0(state.arena, exprNodeId);
+        if (argCount != paramCount) {
+            diagnosticBufferAppend(state.diagnostics, "Type Error",
+                    arenaStartLine(state.arena, exprNodeId), arenaStartCol(state.arena, exprNodeId),
+                    "function '" + calleeName + "' expects " + numToText(paramCount) + " argument(s), found " + numToText(argCount), "");
+        }
+
+        num checked = paramCount;
+        if (argCount < paramCount) {
+            checked = argCount;
+        }
+        num c = 0;
+        loop (c < checked) {
+            if (argOks.items[c] == 1) {
+                num paramElem = functionParamElemAt(state.arena, declNodeId, c);
+                num paramIsArray = functionParamIsArrayAt(state.arena, declNodeId, c);
+                text paramStructName = functionParamStructNameAt(state.arena, declNodeId, c);
+                if (!typeRulesIsArgumentCompatible(argElems.items[c], argIsArrays.items[c], argStructNames.items[c], paramElem, paramIsArray, paramStructName)) {
+                    diagnosticBufferAppend(state.diagnostics, "Type Error",
+                            arenaStartLine(state.arena, exprNodeId), arenaStartCol(state.arena, exprNodeId),
+                            "argument " + numToText(c + 1) + " of '" + calleeName + "': expected '"
+                                    + typeDisplayName(paramElem, paramIsArray, paramStructName) + "', found '"
+                                    + typeDisplayName(argElems.items[c], argIsArrays.items[c], argStructNames.items[c]) + "'", "");
+                }
+            }
+            c = c + 1;
+        }
+
+        give recordType(state, exprNodeId, functionReturnElem(state.arena, declNodeId),
+                functionReturnIsArray(state.arena, declNodeId), functionReturnStructName(state.arena, declNodeId), out);
+    }
+
+    if (kind == nodeKindNewArrayExpression()) {
+        num sizeNodeId = arenaChild1(state.arena, exprNodeId);
+        TypeSlots sizeType = typeSlotsCreate();
+        flag sizeOk = typeOf(state, sizeNodeId, sizeType);
+        flag sizeIsOk = sizeOk && sizeType.isArray == 0 && sizeType.elem == primTypeInt();
+        if (sizeOk && !sizeIsOk) {
+            diagnosticBufferAppend(state.diagnostics, "Type Error",
+                    arenaStartLine(state.arena, sizeNodeId), arenaStartCol(state.arena, sizeNodeId),
+                    "array size must be 'num', found '" + typeDisplayName(sizeType.elem, sizeType.isArray, sizeType.structName) + "'", "");
+        }
+        num elemType = arenaTypeElem(state.arena, exprNodeId);
+        if (elemType == primTypeVoid()) {
+            diagnosticBufferAppend(state.diagnostics, "Type Error",
+                    arenaStartLine(state.arena, exprNodeId), arenaStartCol(state.arena, exprNodeId),
+                    "array element type cannot be 'none'", "");
+            give typeOfFailed(out);
+        }
+        give recordType(state, exprNodeId, elemType, 1, "", out);
+    }
+
+    if (kind == nodeKindArrayAccessExpression()) {
+        num arrayNodeId = arenaChild1(state.arena, exprNodeId);
+        num indexNodeId = arenaChild2(state.arena, exprNodeId);
+        TypeSlots arrayType = typeSlotsCreate();
+        TypeSlots indexType = typeSlotsCreate();
+        flag arrayOk = typeOf(state, arrayNodeId, arrayType);
+        flag indexOk = typeOf(state, indexNodeId, indexType);
+        if (arrayOk && arrayType.isArray == 0) {
+            diagnosticBufferAppend(state.diagnostics, "Type Error",
+                    arenaStartLine(state.arena, arrayNodeId), arenaStartCol(state.arena, arrayNodeId),
+                    "cannot index into non-array type '" + typeDisplayName(arrayType.elem, arrayType.isArray, arrayType.structName) + "'", "");
+            give typeOfFailed(out);
+        }
+        if (indexOk && (indexType.isArray == 1 || indexType.elem != primTypeInt())) {
+            diagnosticBufferAppend(state.diagnostics, "Type Error",
+                    arenaStartLine(state.arena, indexNodeId), arenaStartCol(state.arena, indexNodeId),
+                    "array index must be 'num', found '" + typeDisplayName(indexType.elem, indexType.isArray, indexType.structName) + "'", "");
+        }
+        if (!arrayOk) {
+            give typeOfFailed(out);
+        }
+        give recordType(state, exprNodeId, arrayType.elem, 0, "", out);
+    }
+
+    if (kind == nodeKindArrayLengthExpression()) {
+        num arrayNodeId = arenaChild1(state.arena, exprNodeId);
+        TypeSlots arrayType = typeSlotsCreate();
+        flag arrayOk = typeOf(state, arrayNodeId, arrayType);
+        if (!arrayOk) {
+            give typeOfFailed(out);
+        }
+        if (arrayType.isArray == 0) {
+            diagnosticBufferAppend(state.diagnostics, "Type Error",
+                    arenaStartLine(state.arena, arrayNodeId), arenaStartCol(state.arena, arrayNodeId),
+                    "'.len()' can only be called on an array, found '" + typeDisplayName(arrayType.elem, arrayType.isArray, arrayType.structName) + "'", "");
+            give typeOfFailed(out);
+        }
+        give recordType(state, exprNodeId, primTypeInt(), 0, "", out);
+    }
+
+    if (kind == nodeKindIndexAssignmentExpression()) {
+        num arrayNodeId = arenaChild1(state.arena, exprNodeId);
+        num indexNodeId = arenaChild2(state.arena, exprNodeId);
+        num valueNodeId = arenaChild3(state.arena, exprNodeId);
+        TypeSlots arrayType = typeSlotsCreate();
+        TypeSlots indexType = typeSlotsCreate();
+        TypeSlots valueType = typeSlotsCreate();
+        flag arrayOk = typeOf(state, arrayNodeId, arrayType);
+        flag indexOk = typeOf(state, indexNodeId, indexType);
+        flag valueOk = typeOf(state, valueNodeId, valueType);
+
+        if (arrayOk && arrayType.isArray == 0) {
+            diagnosticBufferAppend(state.diagnostics, "Type Error",
+                    arenaStartLine(state.arena, arrayNodeId), arenaStartCol(state.arena, arrayNodeId),
+                    "cannot index into non-array type '" + typeDisplayName(arrayType.elem, arrayType.isArray, arrayType.structName) + "'", "");
+            give typeOfFailed(out);
+        }
+        if (indexOk && (indexType.isArray == 1 || indexType.elem != primTypeInt())) {
+            diagnosticBufferAppend(state.diagnostics, "Type Error",
+                    arenaStartLine(state.arena, indexNodeId), arenaStartCol(state.arena, indexNodeId),
+                    "array index must be 'num', found '" + typeDisplayName(indexType.elem, indexType.isArray, indexType.structName) + "'", "");
+        }
+        if (!arrayOk || !valueOk) {
+            give typeOfFailed(out);
+        }
+
+        num elementElem = arrayType.elem;
+        if (!typeRulesIsAssignable(valueType.elem, valueType.isArray, valueType.structName, elementElem, 0, "")) {
+            diagnosticBufferAppend(state.diagnostics, "Type Error",
+                    arenaStartLine(state.arena, exprNodeId), arenaStartCol(state.arena, exprNodeId),
+                    "cannot assign '" + typeDisplayName(valueType.elem, valueType.isArray, valueType.structName)
+                            + "' to array element of type '" + typeDisplayName(elementElem, 0, "") + "'", "");
+            give typeOfFailed(out);
+        }
+        give recordType(state, exprNodeId, elementElem, 0, "", out);
+    }
+
+    if (kind == nodeKindNewStructExpression()) {
+        num argCount = arenaListCount(state.arena, exprNodeId);
+        VectorNum argOks = vectorNumCreate();
+        VectorNum argElems = vectorNumCreate();
+        VectorNum argIsArrays = vectorNumCreate();
+        VectorText argStructNames = vectorTextCreate();
+        num a = 0;
+        loop (a < argCount) {
+            TypeSlots argType = typeSlotsCreate();
+            flag ok = typeOf(state, arenaListAt(state.arena, exprNodeId, a), argType);
+            vectorNumPush(argOks, boolToNum(ok));
+            vectorNumPush(argElems, argType.elem);
+            vectorNumPush(argIsArrays, argType.isArray);
+            vectorTextPush(argStructNames, argType.structName);
+            a = a + 1;
+        }
+
+        text structName = arenaText0(state.arena, exprNodeId);
+        num structRow = structTableLookupRow(state.structs, structName);
+        if (structRow == -1) {
+            give typeOfFailed(out); // already reported in analyzeExpr
+        }
+        num structDeclNodeId = state.structs.declNodeIds.items[structRow];
+        num fieldCount = arenaListCount(state.arena, structDeclNodeId);
+        if (argCount != fieldCount) {
+            diagnosticBufferAppend(state.diagnostics, "Type Error",
+                    arenaStartLine(state.arena, exprNodeId), arenaStartCol(state.arena, exprNodeId),
+                    "struct '" + structName + "' expects " + numToText(fieldCount) + " argument(s), found " + numToText(argCount), "");
+        }
+
+        num checked = fieldCount;
+        if (argCount < fieldCount) {
+            checked = argCount;
+        }
+        num c = 0;
+        loop (c < checked) {
+            if (argOks.items[c] == 1) {
+                num fieldNodeId = arenaListAt(state.arena, structDeclNodeId, c);
+                num fieldElem = arenaTypeElem(state.arena, fieldNodeId);
+                num fieldIsArray = arenaTypeIsArray(state.arena, fieldNodeId);
+                text fieldStructName = arenaTypeStructName(state.arena, fieldNodeId);
+                if (!typeRulesIsArgumentCompatible(argElems.items[c], argIsArrays.items[c], argStructNames.items[c], fieldElem, fieldIsArray, fieldStructName)) {
+                    diagnosticBufferAppend(state.diagnostics, "Type Error",
+                            arenaStartLine(state.arena, exprNodeId), arenaStartCol(state.arena, exprNodeId),
+                            "argument " + numToText(c + 1) + " of struct '" + structName + "': expected '"
+                                    + typeDisplayName(fieldElem, fieldIsArray, fieldStructName) + "', found '"
+                                    + typeDisplayName(argElems.items[c], argIsArrays.items[c], argStructNames.items[c]) + "'", "");
+                }
+            }
+            c = c + 1;
+        }
+
+        give recordType(state, exprNodeId, primTypeBool(), 0, structName, out);
+    }
+
+    if (kind == nodeKindFieldAccessExpression()) {
+        num targetNodeId = arenaChild1(state.arena, exprNodeId);
+        TypeSlots targetType = typeSlotsCreate();
+        flag targetOk = typeOf(state, targetNodeId, targetType);
+        if (!targetOk) {
+            give typeOfFailed(out);
+        }
+        text fieldName = arenaText0(state.arena, exprNodeId);
+        if (targetType.isArray == 1 || targetType.structName == "") {
+            diagnosticBufferAppend(state.diagnostics, "Type Error",
+                    arenaStartLine(state.arena, exprNodeId), arenaStartCol(state.arena, exprNodeId),
+                    "cannot access field '" + fieldName + "' on non-struct type '"
+                            + typeDisplayName(targetType.elem, targetType.isArray, targetType.structName) + "'", "");
+            give typeOfFailed(out);
+        }
+        num structRow = structTableLookupRow(state.structs, targetType.structName);
+        if (structRow == -1) {
+            give typeOfFailed(out); // undefined struct already reported at the target's declaration
+        }
+        num structDeclNodeId = state.structs.declNodeIds.items[structRow];
+        num fieldNodeId = resolveFieldNode(state, structDeclNodeId, fieldName,
+                arenaStartLine(state.arena, exprNodeId), arenaStartCol(state.arena, exprNodeId));
+        if (fieldNodeId == -1) {
+            give typeOfFailed(out);
+        }
+        give recordType(state, exprNodeId, arenaTypeElem(state.arena, fieldNodeId),
+                arenaTypeIsArray(state.arena, fieldNodeId), arenaTypeStructName(state.arena, fieldNodeId), out);
+    }
+
+    // FieldAssignmentExpression (the last remaining kind - unconditional,
+    // matching the "sequential ifs, final case unconditional" pattern
+    // already used throughout parser.gopi, so this function's own definite-
+    // return check is satisfied by this final unconditional give).
+    num targetNodeId = arenaChild1(state.arena, exprNodeId);
+    num valueNodeId = arenaChild2(state.arena, exprNodeId);
+    TypeSlots targetType = typeSlotsCreate();
+    TypeSlots valueType = typeSlotsCreate();
+    flag targetOk = typeOf(state, targetNodeId, targetType);
+    flag valueOk = typeOf(state, valueNodeId, valueType);
+
+    if (!targetOk) {
+        give typeOfFailed(out);
+    }
+    text fieldName = arenaText0(state.arena, exprNodeId);
+    if (targetType.isArray == 1 || targetType.structName == "") {
+        diagnosticBufferAppend(state.diagnostics, "Type Error",
+                arenaStartLine(state.arena, exprNodeId), arenaStartCol(state.arena, exprNodeId),
+                "cannot access field '" + fieldName + "' on non-struct type '"
+                        + typeDisplayName(targetType.elem, targetType.isArray, targetType.structName) + "'", "");
+        give typeOfFailed(out);
+    }
+    num structRow2 = structTableLookupRow(state.structs, targetType.structName);
+    if (structRow2 == -1) {
+        give typeOfFailed(out); // undefined struct already reported at the target's declaration
+    }
+    num structDeclNodeId2 = state.structs.declNodeIds.items[structRow2];
+    num fieldNodeId2 = resolveFieldNode(state, structDeclNodeId2, fieldName,
+            arenaStartLine(state.arena, exprNodeId), arenaStartCol(state.arena, exprNodeId));
+    if (fieldNodeId2 == -1 || !valueOk) {
+        give typeOfFailed(out);
+    }
+    num fieldElem2 = arenaTypeElem(state.arena, fieldNodeId2);
+    num fieldIsArray2 = arenaTypeIsArray(state.arena, fieldNodeId2);
+    text fieldStructName2 = arenaTypeStructName(state.arena, fieldNodeId2);
+    if (!typeRulesIsAssignable(valueType.elem, valueType.isArray, valueType.structName, fieldElem2, fieldIsArray2, fieldStructName2)) {
+        diagnosticBufferAppend(state.diagnostics, "Type Error",
+                arenaStartLine(state.arena, exprNodeId), arenaStartCol(state.arena, exprNodeId),
+                "cannot assign '" + typeDisplayName(valueType.elem, valueType.isArray, valueType.structName)
+                        + "' to field of type '" + typeDisplayName(fieldElem2, fieldIsArray2, fieldStructName2) + "'", "");
+        give typeOfFailed(out);
+    }
+    give recordType(state, exprNodeId, fieldElem2, fieldIsArray2, fieldStructName2, out);
+}
+
+// checkExpr(): resolution (analyzeExpr) always runs before typing (typeOf) -
+// the one, explicit place this ordering is enforced, mirroring
+// SemanticAnalyzer.java's own checkExpr() exactly. typeOf()'s own internal
+// recursion into sub-expressions calls typeOf() directly, never checkExpr()
+// again - analyzeExpr() already recursed through the WHOLE expression tree
+// in this one top-level call.
+flag checkExpr(SemanticState state, num exprNodeId, TypeSlots out) {
+    analyzeExpr(state, exprNodeId);
+    give typeOf(state, exprNodeId, out);
+}
+
+// ---------------------------------------------------------------------
+// analyzeStatement - direct port of analyzeStatement(Stmt)'s switch: scope
+// management, definite assignment, and statement-level type checking, all
+// woven together exactly as in Java.
+// ---------------------------------------------------------------------
+
+none analyzeStatement(SemanticState state, num stmtNodeId) {
+    num kind = arenaKind(state.arena, stmtNodeId);
+
+    if (kind == nodeKindBlockStatement()) {
+        num enclosing = state.currentScope;
+        state.currentScope = scopeCreate(state.scopes, enclosing);
+        num stmtCount = arenaListCount(state.arena, stmtNodeId);
+        num i = 0;
+        loop (i < stmtCount) {
+            analyzeStatement(state, arenaListAt(state.arena, stmtNodeId, i));
+            i = i + 1;
+        }
+        state.currentScope = enclosing; // leaving the scope: just stop using the child
+
+    } else if (kind == nodeKindVariableDeclaration()) {
+        resolveDeclaredTypeAtNode(state, stmtNodeId);
+
+        num initNodeId = arenaChild1(state.arena, stmtNodeId);
+        if (initNodeId != -1) {
+            // Checked before insertion, deliberately - an initializer must
+            // not be able to see the variable it initializes.
+            TypeSlots initType = typeSlotsCreate();
+            flag ok = checkExpr(state, initNodeId, initType);
+            if (ok) {
+                num declElem = arenaTypeElem(state.arena, stmtNodeId);
+                num declIsArray = arenaTypeIsArray(state.arena, stmtNodeId);
+                text declStructName = arenaTypeStructName(state.arena, stmtNodeId);
+                if (!typeRulesIsAssignable(initType.elem, initType.isArray, initType.structName, declElem, declIsArray, declStructName)) {
+                    diagnosticBufferAppend(state.diagnostics, "Type Error",
+                            arenaStartLine(state.arena, initNodeId), arenaStartCol(state.arena, initNodeId),
+                            "cannot assign '" + typeDisplayName(initType.elem, initType.isArray, initType.structName)
+                                    + "' to variable of type '" + typeDisplayName(declElem, declIsArray, declStructName) + "'", "");
+                }
+            }
+        }
+
+        text name = arenaText0(state.arena, stmtNodeId);
+        num shadowedDeclNodeId = scopeResolve(state.scopes, state.currentScope, name);
+        num sameScopeDeclNodeId = scopeDefine(state.scopes, state.currentScope, name, stmtNodeId);
+
+        if (initNodeId != -1) {
+            // Assigned regardless of whether the initializer's type was
+            // actually compatible - a different question from whether a
+            // value was given at all.
+            assignedFlagsSet(state.currentAssigned, stmtNodeId);
+        }
+
+        if (sameScopeDeclNodeId != -1) {
+            diagnosticBufferAppend(state.diagnostics, "Semantic Error",
+                    arenaStartLine(state.arena, stmtNodeId), arenaStartCol(state.arena, stmtNodeId),
+                    "variable '" + name + "' is already declared in this scope",
+                    "previous declaration was at " + nodeRangeText(state.arena, sameScopeDeclNodeId));
+        } else if (shadowedDeclNodeId != -1) {
+            diagnosticBufferAppend(state.diagnostics, "Semantic Error",
+                    arenaStartLine(state.arena, stmtNodeId), arenaStartCol(state.arena, stmtNodeId),
+                    "variable '" + name + "' shadows a variable from an enclosing scope",
+                    "enclosing declaration was at " + nodeRangeText(state.arena, shadowedDeclNodeId));
+        }
+
+    } else if (kind == nodeKindIfStatement()) {
+        num condNodeId = arenaChild1(state.arena, stmtNodeId);
+        TypeSlots condType = typeSlotsCreate();
+        flag condOk = checkExpr(state, condNodeId, condType);
+        if (condOk && (condType.isArray == 1 || condType.elem != primTypeBool())) {
+            diagnosticBufferAppend(state.diagnostics, "Type Error",
+                    arenaStartLine(state.arena, condNodeId), arenaStartCol(state.arena, condNodeId),
+                    "if condition must be 'flag', found '" + typeDisplayName(condType.elem, condType.isArray, condType.structName) + "'", "");
+        }
+
+        // Branch merging: each branch analyzed from an independent snapshot
+        // of what's assigned going in. A variable is assigned after the
+        // whole if-statement only if BOTH branches assigned it, or there's
+        // no else at all (the false path contributes nothing new).
+        VectorNum beforeBranches = vectorNumCopy(state.currentAssigned);
+        analyzeStatement(state, arenaChild2(state.arena, stmtNodeId));
+        VectorNum afterThen = state.currentAssigned;
+
+        num elseNodeId = arenaChild3(state.arena, stmtNodeId);
+        VectorNum afterElse;
+        if (elseNodeId != -1) {
+            state.currentAssigned = vectorNumCopy(beforeBranches);
+            analyzeStatement(state, elseNodeId);
+            afterElse = state.currentAssigned;
+        } else {
+            afterElse = beforeBranches;
+        }
+
+        state.currentAssigned = assignedFlagsIntersect(afterThen, afterElse);
+
+    } else if (kind == nodeKindWhileStatement()) {
+        num condNodeId = arenaChild1(state.arena, stmtNodeId);
+        TypeSlots condType = typeSlotsCreate();
+        flag condOk = checkExpr(state, condNodeId, condType);
+        if (condOk && (condType.isArray == 1 || condType.elem != primTypeBool())) {
+            diagnosticBufferAppend(state.diagnostics, "Type Error",
+                    arenaStartLine(state.arena, condNodeId), arenaStartCol(state.arena, condNodeId),
+                    "while condition must be 'flag', found '" + typeDisplayName(condType.elem, condType.isArray, condType.structName) + "'", "");
+        }
+        // Conservative, uniformly: the body might execute zero times.
+        VectorNum beforeLoop = vectorNumCopy(state.currentAssigned);
+        analyzeStatement(state, arenaChild2(state.arena, stmtNodeId));
+        state.currentAssigned = beforeLoop;
+
+    } else if (kind == nodeKindReturnStatement()) {
+        num declaredElem = arenaTypeElem(state.arena, state.currentFunctionDeclNodeId);
+        num declaredIsArray = arenaTypeIsArray(state.arena, state.currentFunctionDeclNodeId);
+        text declaredStructName = arenaTypeStructName(state.arena, state.currentFunctionDeclNodeId);
+        flag declaredIsVoid = declaredIsArray == 0 && declaredElem == primTypeVoid();
+        num valueNodeId = arenaChild1(state.arena, stmtNodeId);
+        if (valueNodeId == -1) {
+            if (!declaredIsVoid) {
+                diagnosticBufferAppend(state.diagnostics, "Type Error",
+                        arenaStartLine(state.arena, stmtNodeId), arenaStartCol(state.arena, stmtNodeId),
+                        "missing return value in function declared to return '"
+                                + typeDisplayName(declaredElem, declaredIsArray, declaredStructName) + "'", "");
+            }
+        } else {
+            TypeSlots valueType = typeSlotsCreate();
+            flag valueOk = checkExpr(state, valueNodeId, valueType);
+            if (declaredIsVoid) {
+                diagnosticBufferAppend(state.diagnostics, "Type Error",
+                        arenaStartLine(state.arena, valueNodeId), arenaStartCol(state.arena, valueNodeId),
+                        "cannot return a value from a function declared 'none'", "");
+            } else if (valueOk) {
+                if (!typeRulesIsReturnCompatible(valueType.elem, valueType.isArray, valueType.structName, declaredElem, declaredIsArray, declaredStructName)) {
+                    diagnosticBufferAppend(state.diagnostics, "Type Error",
+                            arenaStartLine(state.arena, valueNodeId), arenaStartCol(state.arena, valueNodeId),
+                            "cannot return '" + typeDisplayName(valueType.elem, valueType.isArray, valueType.structName)
+                                    + "' from a function declared to return '"
+                                    + typeDisplayName(declaredElem, declaredIsArray, declaredStructName) + "'", "");
+                }
+            }
+        }
+
+    } else if (kind == nodeKindPrintStatement()) {
+        num valueNodeId = arenaChild1(state.arena, stmtNodeId);
+        TypeSlots valueType = typeSlotsCreate();
+        flag ok = checkExpr(state, valueNodeId, valueType);
+        if (ok && !typeRulesIsPrintable(valueType.elem, valueType.isArray, valueType.structName)) {
+            diagnosticBufferAppend(state.diagnostics, "Type Error",
+                    arenaStartLine(state.arena, valueNodeId), arenaStartCol(state.arena, valueNodeId),
+                    "cannot print a value of type '" + typeDisplayName(valueType.elem, valueType.isArray, valueType.structName) + "'", "");
+        }
+
+    } else {
+        // ExpressionStatement
+        TypeSlots discard = typeSlotsCreate();
+        checkExpr(state, arenaChild1(state.arena, stmtNodeId), discard);
+    }
+}
+
+// ---------------------------------------------------------------------
+// analyzeFunction - direct port of analyzeFunction(FunctionDeclaration).
+// The parameter scope and the body's top-level scope are the SAME scope -
+// no extra nesting for the outermost block, which is why this walks
+// function.body().statements() directly rather than calling
+// analyzeStatement() on the whole BlockStatement node.
+// ---------------------------------------------------------------------
+
+none analyzeFunction(SemanticState state, num functionNodeId) {
+    state.currentFunctionDeclNodeId = functionNodeId;
+    num scopeId = scopeCreate(state.scopes, -1);
+    state.currentScope = scopeId;
+    state.currentAssigned = filledVectorNum(arenaNodeCount(state.arena), 0);
+
+    num paramCount = arenaListCount(state.arena, functionNodeId);
+    num i = 0;
+    loop (i < paramCount) {
+        num paramNodeId = arenaListAt(state.arena, functionNodeId, i);
+        text paramName = arenaText0(state.arena, paramNodeId);
+        num existing = scopeDefine(state.scopes, scopeId, paramName, paramNodeId);
+        if (existing != -1) {
+            diagnosticBufferAppend(state.diagnostics, "Semantic Error",
+                    arenaStartLine(state.arena, paramNodeId), arenaStartCol(state.arena, paramNodeId),
+                    "parameter '" + paramName + "' is already declared",
+                    "previous declaration was at " + nodeRangeText(state.arena, existing));
+        }
+        assignedFlagsSet(state.currentAssigned, paramNodeId); // parameters begin assigned, unconditionally
+        i = i + 1;
+    }
+
+    num bodyNodeId = arenaChild1(state.arena, functionNodeId);
+    num stmtCount = arenaListCount(state.arena, bodyNodeId);
+    num s = 0;
+    loop (s < stmtCount) {
+        analyzeStatement(state, arenaListAt(state.arena, bodyNodeId, s));
+        s = s + 1;
+    }
+
+    num returnElem = arenaTypeElem(state.arena, functionNodeId);
+    num returnIsArray = arenaTypeIsArray(state.arena, functionNodeId);
+    flag returnIsVoid = returnIsArray == 0 && returnElem == primTypeVoid();
+    if (!returnIsVoid && !returnsOnAllPaths(state, bodyNodeId)) {
+        diagnosticBufferAppend(state.diagnostics, "Type Error",
+                arenaStartLine(state.arena, functionNodeId), arenaStartCol(state.arena, functionNodeId),
+                "function '" + arenaText0(state.arena, functionNodeId) + "' does not return a value on all paths",
+                "declared to return '" + typeDisplayName(returnElem, returnIsArray, arenaTypeStructName(state.arena, functionNodeId)) + "'");
+    }
+
+    state.currentScope = -1;
+    state.currentFunctionDeclNodeId = -1;
+    state.currentAssigned = vectorNumCreate();
+}
+
+// ---------------------------------------------------------------------
+// analyze - the top-level driver, direct port of analyze()'s ordering:
+// registerBuiltins -> registerStructs -> registerFunctions -> analyze every
+// function's body -> validateMainFunction -> build the immutable output.
+// ---------------------------------------------------------------------
+
+SemanticTables analyze(AstArena arena, num programNodeId, DiagnosticBuffer diagnostics) {
+    SemanticState state = semanticStateCreate(arena, programNodeId, diagnostics);
+
+    registerBuiltins(state.functions);
+    registerStructs(state);
+    registerFunctions(state);
+
+    num functionCount = arenaListCount(arena, programNodeId);
+    num i = 0;
+    loop (i < functionCount) {
+        analyzeFunction(state, arenaListAt(arena, programNodeId, i));
+        i = i + 1;
+    }
+
+    validateMainFunction(state);
+
+    give new SemanticTables(state.functions, state.structs, state.resolvedDeclByNode, state.resolvedFunctionByNode,
+            state.typeElemByNode, state.typeIsArrayByNode, state.typeStructNameByNode, state.diagnostics);
+}

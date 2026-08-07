@@ -1,0 +1,239 @@
+// type_rules.gopi - Project 3, Phase 4: the self-hosted type-compatibility
+// table. A direct, line-for-line port of TypeRules.java's pure static
+// functions, translated the way every prior phase's Java class was: a type
+// (TypeRef in Java) is represented here as three plain values passed
+// explicitly - elem (a primTypeXxx() constant), isArray (0/1), structName
+// (text, "" when absent) - rather than a struct, since every one of these
+// functions is a small, cheap, side-effect-free predicate/lookup where
+// passing three primitives is no more verbose than passing one struct would
+// be, and keeps this file entirely free of any dependency on TypeSlots
+// (defined in parser.gopi) or the AstArena. The one exception is
+// resultOfUnary/resultOfBinary's result: Java returns Optional<PrimitiveType>,
+// which becomes a plain num here with -1 as the "empty" sentinel - the same
+// sentinel convention every prior phase already uses for "no value".
+//
+// Zero dependency on Scope, SemanticState, or the AST node hierarchy - only
+// the primTypeXxx()/unaryOpXxx()/binaryOpXxx() constants already defined in
+// ast_arena.gopi, exactly mirroring TypeRules.java's own "independently
+// testable" isolation.
+
+flag typeRulesIsNumeric(num t) {
+    give t == primTypeInt() || t == primTypeFloat();
+}
+
+// Scalar assignability only (equal types, or int widening to float) - the
+// non-array half of isAssignable below.
+flag typeRulesIsAssignableScalar(num from, num to) {
+    if (from == to) {
+        give from != primTypeVoid();
+    }
+    give from == primTypeInt() && to == primTypeFloat();
+}
+
+// Array-ness must match exactly on both sides first (no widening, struct or
+// primitive alike). A struct type is nominal: compatible only with another
+// struct type of the exact same name, checked via structName before elem is
+// ever consulted (elem is meaningless for a struct type). Only once neither
+// side is a struct does the scalar rule (equal types, or int->float
+// widening) apply.
+flag typeRulesIsAssignable(num fromElem, num fromIsArray, text fromStructName, num toElem, num toIsArray, text toStructName) {
+    if (fromIsArray != toIsArray) {
+        give no;
+    }
+    if (!(fromStructName == "") || !(toStructName == "")) {
+        give fromStructName == toStructName;
+    }
+    if (fromIsArray == 1) {
+        give fromElem == toElem;
+    }
+    give typeRulesIsAssignableScalar(fromElem, toElem);
+}
+
+flag typeRulesIsReturnCompatible(num fromElem, num fromIsArray, text fromStructName, num toElem, num toIsArray, text toStructName) {
+    give typeRulesIsAssignable(fromElem, fromIsArray, fromStructName, toElem, toIsArray, toStructName);
+}
+
+flag typeRulesIsArgumentCompatible(num fromElem, num fromIsArray, text fromStructName, num toElem, num toIsArray, text toStructName) {
+    give typeRulesIsAssignable(fromElem, fromIsArray, fromStructName, toElem, toIsArray, toStructName);
+}
+
+// Whether show(...) accepts a value of this type: every scalar primitive
+// except none; no array; no struct.
+flag typeRulesIsPrintable(num elem, num isArray, text structName) {
+    if (isArray == 1 || !(structName == "")) {
+        give no;
+    }
+    give elem == primTypeInt() || elem == primTypeFloat() || elem == primTypeBool() || elem == primTypeString();
+}
+
+num typeRulesResultOfUnary(num operator, num operand) {
+    if (operator == unaryOpNegate()) {
+        if (typeRulesIsNumeric(operand)) {
+            give operand;
+        }
+        give -1;
+    }
+    // NOT
+    if (operand == primTypeBool()) {
+        give primTypeBool();
+    }
+    give -1;
+}
+
+num typeRulesResultOfAdd(num left, num right) {
+    if (left == primTypeString() && right == primTypeString()) {
+        give primTypeString();
+    }
+    give typeRulesResultOfArithmetic(left, right);
+}
+
+num typeRulesResultOfArithmetic(num left, num right) {
+    if (left == primTypeInt() && right == primTypeInt()) {
+        give primTypeInt();
+    }
+    if (typeRulesIsNumeric(left) && typeRulesIsNumeric(right)) {
+        give primTypeFloat();
+    }
+    give -1;
+}
+
+num typeRulesResultOfModulo(num left, num right) {
+    if (left == primTypeInt() && right == primTypeInt()) {
+        give primTypeInt();
+    }
+    give -1;
+}
+
+num typeRulesResultOfComparison(num left, num right) {
+    if (typeRulesIsNumeric(left) && typeRulesIsNumeric(right)) {
+        give primTypeBool();
+    }
+    give -1;
+}
+
+num typeRulesResultOfEquality(num left, num right) {
+    if (typeRulesIsNumeric(left) && typeRulesIsNumeric(right)) {
+        give primTypeBool();
+    }
+    if (left == right && (left == primTypeBool() || left == primTypeString())) {
+        give primTypeBool();
+    }
+    give -1;
+}
+
+num typeRulesResultOfLogical(num left, num right) {
+    if (left == primTypeBool() && right == primTypeBool()) {
+        give primTypeBool();
+    }
+    give -1;
+}
+
+num typeRulesResultOfBinary(num left, num operator, num right) {
+    if (operator == binaryOpAdd()) {
+        give typeRulesResultOfAdd(left, right);
+    }
+    if (operator == binaryOpSubtract() || operator == binaryOpMultiply() || operator == binaryOpDivide()) {
+        give typeRulesResultOfArithmetic(left, right);
+    }
+    if (operator == binaryOpModulo()) {
+        give typeRulesResultOfModulo(left, right);
+    }
+    if (operator == binaryOpEqual() || operator == binaryOpNotEqual()) {
+        give typeRulesResultOfEquality(left, right);
+    }
+    if (operator == binaryOpLess() || operator == binaryOpGreater()
+            || operator == binaryOpLessEqual() || operator == binaryOpGreaterEqual()) {
+        give typeRulesResultOfComparison(left, right);
+    }
+    // AND / OR
+    give typeRulesResultOfLogical(left, right);
+}
+
+// ---------------------------------------------------------------------
+// Display/symbol text for diagnostics - mirrors PrimitiveType.displayName(),
+// TypeRef.displayName(), UnaryOperator.symbol(), BinaryOperator.symbol().
+// ---------------------------------------------------------------------
+
+text primTypeDisplayName(num elem) {
+    if (elem == primTypeInt()) {
+        give "num";
+    }
+    if (elem == primTypeFloat()) {
+        give "dec";
+    }
+    if (elem == primTypeBool()) {
+        give "flag";
+    }
+    if (elem == primTypeString()) {
+        give "text";
+    }
+    give "none";
+}
+
+text typeDisplayName(num elem, num isArray, text structName) {
+    text base = structName;
+    if (structName == "") {
+        base = primTypeDisplayName(elem);
+    }
+    if (isArray == 1) {
+        give base + "[]";
+    }
+    give base;
+}
+
+text unaryOpSymbol(num op) {
+    if (op == unaryOpNegate()) {
+        give "-";
+    }
+    give "!";
+}
+
+text binaryOpSymbol(num op) {
+    if (op == binaryOpAdd()) {
+        give "+";
+    }
+    if (op == binaryOpSubtract()) {
+        give "-";
+    }
+    if (op == binaryOpMultiply()) {
+        give "*";
+    }
+    if (op == binaryOpDivide()) {
+        give "/";
+    }
+    if (op == binaryOpModulo()) {
+        give "%";
+    }
+    if (op == binaryOpEqual()) {
+        give "==";
+    }
+    if (op == binaryOpNotEqual()) {
+        give "!=";
+    }
+    if (op == binaryOpLess()) {
+        give "<";
+    }
+    if (op == binaryOpGreater()) {
+        give ">";
+    }
+    if (op == binaryOpLessEqual()) {
+        give "<=";
+    }
+    if (op == binaryOpGreaterEqual()) {
+        give ">=";
+    }
+    if (op == binaryOpAnd()) {
+        give "&&";
+    }
+    give "||";
+}
+
+// Mirrors SourceRange.toString(): a single "line:col" when the range is
+// single-line (start.line() == end.line()), else "line:col-line:col".
+// Confirmed directly from util/SourceRange.java and util/SourceLocation.java.
+text rangeToText(num startLine, num startCol, num endLine, num endCol) {
+    if (startLine == endLine) {
+        give numToText(startLine) + ":" + numToText(startCol);
+    }
+    give numToText(startLine) + ":" + numToText(startCol) + "-" + numToText(endLine) + ":" + numToText(endCol);
+}

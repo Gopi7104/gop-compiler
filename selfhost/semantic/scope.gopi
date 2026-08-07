@@ -1,0 +1,107 @@
+// scope.gopi - Project 3, Phase 4: scope chain and variable resolution.
+//
+// Scope.java's parent-linked chain of per-scope HashMaps cannot be ported
+// directly: GopiLang can construct neither a self-referencing struct
+// (`struct Scope { Scope parent; ... }` is exactly the direct-containment
+// cycle CLAUDE.md documents as illegal - the semantic analyzer's own
+// cyclic-struct check would reject it unconditionally, regardless of
+// runtime nullability intent) nor an array of structs (`new Scope[n]` stays
+// a parse error even though `Scope[]` is a legal type, so "one HashMap per
+// scope, stored in an array" is equally unreachable). Both alternatives are
+// closed off by the same two frozen rules that already shaped every
+// self-hosted arena/table in this project.
+//
+// The replacement: scopes are dense ids (0, 1, 2, ... in creation order) in
+// a flat VectorNum parent chain, and EVERY scope's variables live in ONE
+// shared HashMapTextToNum, keyed by a synthesized composite text key
+// "<scopeId>#<name>" rather than by name alone. This is safe and
+// unambiguous for two independent, grammar-level reasons, not a runtime
+// check:
+//   1. '#' (character code 35) can never occur inside an identifier -
+//      GopiLang's identifier grammar (isAlpha/isAlphaNumeric, shared
+//      identically by both the real Lexer and this self-hosted one) only
+//      ever consumes ASCII letters, digits, and '_' into a lexeme, so no
+//      identifier the Parser could ever have produced contains '#'.
+//   2. numToText(scopeId) produces only ASCII digits (scope ids start at 0
+//      and only increase, so no leading '-' is ever actually reachable) -
+//      a pure digit run, structurally distinct from the identifier
+//      alphabet on the far side of the '#' marker.
+// Together these guarantee (scopeId, name) pairs map to composite keys
+// injectively: no two distinct pairs ever produce the same text key, so one
+// shared HashMapTextToNum can safely hold every scope's variables at once
+// with no collision risk between scopes or between a scope id's digits and
+// a name.
+//
+// A declNodeId (not a VariableSymbol) is stored as the value at each key -
+// the arena node id of the declaring VariableDeclaration or Parameter,
+// which already carries that declaration's own name, type, and range; no
+// separate symbol-table row is needed (see semantic_analyzer.gopi).
+
+struct ScopeChain {
+    VectorNum parents; // dense scope id -> parent scope id, -1 = none
+    HashMapTextToNum vars; // "scopeId#name" -> declaring arena node id
+}
+
+ScopeChain scopeChainCreate() {
+    give new ScopeChain(vectorNumCreate(), hashMapCreate());
+}
+
+// parent = -1 for the outermost (function-parameter) scope, matching
+// `new Scope(null)` in Java.
+num scopeCreate(ScopeChain sc, num parent) {
+    num id = sc.parents.count;
+    vectorNumPush(sc.parents, parent);
+    give id;
+}
+
+text scopeKey(num scopeId, text name) {
+    give numToText(scopeId) + "#" + name;
+}
+
+// Declares declNodeId under name in scopeId ONLY (not the whole chain).
+// Mirrors Scope.define()'s putIfAbsent semantics exactly: does not insert
+// on a collision, so the original definition stays authoritative. Returns
+// the pre-existing declNodeId if name was already declared in this exact
+// scope, -1 otherwise.
+num scopeDefine(ScopeChain sc, num scopeId, text name, num declNodeId) {
+    text key = scopeKey(scopeId, name);
+    if (hashMapContains(sc.vars, key)) {
+        give hashMapGet(sc.vars, key);
+    }
+    hashMapPut(sc.vars, key, declNodeId);
+    give -1;
+}
+
+// Resolves name in scopeId ONLY, without walking to any parent - the local
+// half of Scope.resolve().
+num scopeResolveLocal(ScopeChain sc, num scopeId, text name) {
+    text key = scopeKey(scopeId, name);
+    if (hashMapContains(sc.vars, key)) {
+        give hashMapGet(sc.vars, key);
+    }
+    give -1;
+}
+
+// Resolves name, walking outward through the whole enclosing chain -
+// mirrors Scope.resolve() exactly (local scope checked first, then each
+// parent in turn).
+num scopeResolve(ScopeChain sc, num scopeId, text name) {
+    num current = scopeId;
+    num result = -1;
+    flag done = no;
+    loop (!done) {
+        num found = scopeResolveLocal(sc, current, name);
+        if (found != -1) {
+            result = found;
+            done = yes;
+        } else {
+            num parent = sc.parents.items[current];
+            if (parent == -1) {
+                done = yes;
+            } else {
+                current = parent;
+            }
+        }
+    }
+    give result;
+}

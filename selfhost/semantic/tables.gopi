@@ -1,0 +1,203 @@
+// tables.gopi - Project 3, Phase 4: FunctionTable and StructTable.
+//
+// Per the approved revision: each table stores ONLY a name and a
+// declaration arena node id - no duplicated source range, signature, field
+// list, or parameter list. Everything else is read directly from the
+// (immutable, frozen) AstArena through that node id, via the accessor
+// functions below - exactly the same "point back into the arena rather than
+// duplicate its data" idiom already used by the Parser for reusing
+// Parameter nodes as struct fields.
+//
+// Builtins: the six B1 VM intrinsics (charCodeAt, textLength,
+// textFromCharCode, readFile, argCount, argAt) have no parsed
+// FunctionDeclaration - there is no arena node for them, and creating one
+// would require arenaAlloc, which only the Parser may ever call. Each
+// builtin's declNodeId is instead one of six small negative sentinels
+// (builtinCharCodeAt() .. builtinArgAt()), distinct both from a real arena
+// node id (always >= 0) and from -1 ("not found"/"no declaration"). The
+// name -> row lookup (functionTableLookupRow, via the shared byName
+// HashMapTextToNum) never inspects declNodeId at all and so never
+// special-cases a builtin row - the special-casing that inherently must
+// exist somewhere (six intrinsics need SOME hardcoded signature, exactly as
+// registerBuiltins() hardcodes six FunctionSymbol literals in Java) is
+// confined entirely to the small builtinReturnTypeElem/builtinParamCount/
+// builtinParamTypeElem functions below, consulted only by the
+// functionReturnXxx/functionParamXxx accessors when a row's declNodeId is
+// negative.
+
+// ---------------------------------------------------------------------
+// Builtin sentinels and their hardcoded signatures
+// ---------------------------------------------------------------------
+
+num builtinCharCodeAt() { give -2; }
+num builtinTextLength() { give -3; }
+num builtinTextFromCharCode() { give -4; }
+num builtinReadFile() { give -5; }
+num builtinArgCount() { give -6; }
+num builtinArgAt() { give -7; }
+
+// charCodeAt(text, num) -> num; textLength(text) -> num;
+// textFromCharCode(num) -> text; readFile(text) -> text; argCount() -> num;
+// argAt(num) -> text. Every builtin return/parameter type is a non-array,
+// non-struct primitive - matches every `new TypeRef(PrimitiveType.X, false)`
+// literal in SemanticAnalyzer.registerBuiltins() exactly.
+num builtinReturnTypeElem(num declNodeId) {
+    if (declNodeId == builtinCharCodeAt()) { give primTypeInt(); }
+    if (declNodeId == builtinTextLength()) { give primTypeInt(); }
+    if (declNodeId == builtinTextFromCharCode()) { give primTypeString(); }
+    if (declNodeId == builtinReadFile()) { give primTypeString(); }
+    if (declNodeId == builtinArgCount()) { give primTypeInt(); }
+    give primTypeString(); // argAt
+}
+
+num builtinParamCount(num declNodeId) {
+    if (declNodeId == builtinCharCodeAt()) { give 2; }
+    if (declNodeId == builtinTextLength()) { give 1; }
+    if (declNodeId == builtinTextFromCharCode()) { give 1; }
+    if (declNodeId == builtinReadFile()) { give 1; }
+    if (declNodeId == builtinArgCount()) { give 0; }
+    give 1; // argAt
+}
+
+num builtinParamTypeElem(num declNodeId, num index) {
+    if (declNodeId == builtinCharCodeAt()) {
+        if (index == 0) { give primTypeString(); }
+        give primTypeInt();
+    }
+    if (declNodeId == builtinTextLength()) { give primTypeString(); }
+    if (declNodeId == builtinTextFromCharCode()) { give primTypeInt(); }
+    if (declNodeId == builtinReadFile()) { give primTypeString(); }
+    give primTypeInt(); // argAt's single parameter
+}
+
+// ---------------------------------------------------------------------
+// FunctionTable
+// ---------------------------------------------------------------------
+
+struct FunctionTable {
+    VectorText names;
+    VectorNum declNodeIds;
+    HashMapTextToNum byName;
+}
+
+FunctionTable functionTableCreate() {
+    give new FunctionTable(vectorTextCreate(), vectorNumCreate(), hashMapCreate());
+}
+
+// Returns the row id, or -1 if name is not (yet) registered.
+num functionTableLookupRow(FunctionTable t, text name) {
+    if (hashMapContains(t.byName, name)) {
+        give hashMapGet(t.byName, name);
+    }
+    give -1;
+}
+
+none functionTableInsert(FunctionTable t, text name, num declNodeId) {
+    num row = t.names.count;
+    vectorTextPush(t.names, name);
+    vectorNumPush(t.declNodeIds, declNodeId);
+    hashMapPut(t.byName, name, row);
+}
+
+none registerBuiltins(FunctionTable t) {
+    functionTableInsert(t, "charCodeAt", builtinCharCodeAt());
+    functionTableInsert(t, "textLength", builtinTextLength());
+    functionTableInsert(t, "textFromCharCode", builtinTextFromCharCode());
+    functionTableInsert(t, "readFile", builtinReadFile());
+    functionTableInsert(t, "argCount", builtinArgCount());
+    functionTableInsert(t, "argAt", builtinArgAt());
+}
+
+// ---------------------------------------------------------------------
+// Function signature accessors - dispatch on whether declNodeId denotes a
+// real FunctionDeclaration arena node (>= 0) or a builtin sentinel (< 0).
+// ---------------------------------------------------------------------
+
+num functionReturnElem(AstArena a, num declNodeId) {
+    if (declNodeId >= 0) { give arenaTypeElem(a, declNodeId); }
+    give builtinReturnTypeElem(declNodeId);
+}
+
+num functionReturnIsArray(AstArena a, num declNodeId) {
+    if (declNodeId >= 0) { give arenaTypeIsArray(a, declNodeId); }
+    give 0;
+}
+
+text functionReturnStructName(AstArena a, num declNodeId) {
+    if (declNodeId >= 0) { give arenaTypeStructName(a, declNodeId); }
+    give "";
+}
+
+num functionParamCount(AstArena a, num declNodeId) {
+    if (declNodeId >= 0) { give arenaListCount(a, declNodeId); }
+    give builtinParamCount(declNodeId);
+}
+
+// Only meaningful for declNodeId >= 0 - the Parameter node at that position.
+num functionParamNodeAt(AstArena a, num declNodeId, num index) {
+    give arenaListAt(a, declNodeId, index);
+}
+
+num functionParamElemAt(AstArena a, num declNodeId, num index) {
+    if (declNodeId >= 0) { give arenaTypeElem(a, functionParamNodeAt(a, declNodeId, index)); }
+    give builtinParamTypeElem(declNodeId, index);
+}
+
+num functionParamIsArrayAt(AstArena a, num declNodeId, num index) {
+    if (declNodeId >= 0) { give arenaTypeIsArray(a, functionParamNodeAt(a, declNodeId, index)); }
+    give 0;
+}
+
+text functionParamStructNameAt(AstArena a, num declNodeId, num index) {
+    if (declNodeId >= 0) { give arenaTypeStructName(a, functionParamNodeAt(a, declNodeId, index)); }
+    give "";
+}
+
+// "0:0" for a builtin - matches BUILTIN_DECLARED_AT = SourceRange.point(new
+// SourceLocation(0, 0)) rendering as "0:0" (single-line, since start==end).
+num functionDeclaredLine(AstArena a, num declNodeId) {
+    if (declNodeId >= 0) { give arenaStartLine(a, declNodeId); }
+    give 0;
+}
+
+num functionDeclaredCol(AstArena a, num declNodeId) {
+    if (declNodeId >= 0) { give arenaStartCol(a, declNodeId); }
+    give 0;
+}
+
+text functionDeclaredAtText(AstArena a, num declNodeId) {
+    if (declNodeId >= 0) {
+        give rangeToText(arenaStartLine(a, declNodeId), arenaStartCol(a, declNodeId),
+                arenaEndLine(a, declNodeId), arenaEndCol(a, declNodeId));
+    }
+    give "0:0";
+}
+
+// ---------------------------------------------------------------------
+// StructTable - no struct builtins exist, so declNodeIds are always a real
+// StructDeclaration arena node id.
+// ---------------------------------------------------------------------
+
+struct StructTable {
+    VectorText names;
+    VectorNum declNodeIds;
+    HashMapTextToNum byName;
+}
+
+StructTable structTableCreate() {
+    give new StructTable(vectorTextCreate(), vectorNumCreate(), hashMapCreate());
+}
+
+num structTableLookupRow(StructTable t, text name) {
+    if (hashMapContains(t.byName, name)) {
+        give hashMapGet(t.byName, name);
+    }
+    give -1;
+}
+
+none structTableInsert(StructTable t, text name, num declNodeId) {
+    num row = t.names.count;
+    vectorTextPush(t.names, name);
+    vectorNumPush(t.declNodeIds, declNodeId);
+    hashMapPut(t.byName, name, row);
+}
