@@ -1,0 +1,1274 @@
+// parser.gopi - Project 2, Phase 3: the self-hosted recursive-descent
+// Parser. A structural mirror of Parser.java (see ARCHITECTURE.md and the
+// Phase 2/3 porting notes), translated into GopiLang's data-oriented shape
+// exactly the way lexer.gopi translated Lexer.java:
+//   - ParserState carries every field Parser.java's instance fields hold
+//     (the token list plus a cursor), passed explicitly to every function
+//     instead of an implicit `this`.
+//   - Every parseXxx() that builds a node returns a plain num node id into
+//     the AstArena (selfhost/ast/ast_arena.gopi). -1 is the ONE reserved
+//     sentinel meaning "parsing failed, a diagnostic was already recorded" -
+//     no node id is ever legitimately -1 (arenaAlloc's ids start at 0 and
+//     only increase).
+//   - GopiLang has no exceptions, so Java's ParseError-throw-and-catch
+//     control flow (unwind arbitrarily many stack frames up to the nearest
+//     parseProgram()/parseBlock()/parseStructDeclaration() loop) is
+//     replaced by explicit sentinel propagation: the function that detects
+//     the problem calls parserError(), which records the diagnostic and
+//     returns -1; every caller that receives -1 from a sub-parse immediately
+//     returns -1 itself WITHOUT consuming further tokens - this is the exact
+//     token-for-token equivalent of an uncaught exception falling through a
+//     frame with nothing else happening in it, generalized to every call
+//     site instead of relying on a language-level unwind. Only the three
+//     loop sites that Java's synchronize() serves (parseProgram,
+//     parseBlock, parseStructDeclaration) catch a -1 themselves, call
+//     parserSynchronize(), and continue their loop - exactly where Java
+//     catches ParseError.
+//   - Token-kind constants (tokenKindXxx()) and TokenStream are reused
+//     verbatim from lexer.gopi - the Parser never redefines them.
+
+// ---------------------------------------------------------------------
+// ParserState
+// ---------------------------------------------------------------------
+
+struct ParserState {
+    TokenStream tokens;
+    num current;
+    AstArena arena;
+    DiagnosticBuffer diagnostics;
+}
+
+ParserState parserCreate(TokenStream tokens, AstArena arena, DiagnosticBuffer diagnostics) {
+    give new ParserState(tokens, 0, arena, diagnostics);
+}
+
+// ---------------------------------------------------------------------
+// Token-stream cursor helpers - direct field reads into TokenStream's
+// columns, mirroring lexerPeek()/lexerAdvance()'s style. "previous" always
+// means "the token at index current-1", i.e. the one most recently
+// consumed by parserAdvance().
+// ---------------------------------------------------------------------
+
+num parserPeekKind(ParserState p) {
+    give p.tokens.types.items[p.current];
+}
+
+// Bounds-checked lookahead at an arbitrary forward offset - used only by
+// isStructTypedDeclarationStart()'s 2-token lookahead. EOF's own kind is
+// returned once the offset runs past the end of the stream (EOF is always
+// the last token, so this never actually walks off the backing array).
+num parserPeekKindAt(ParserState p, num offset) {
+    num index = p.current + offset;
+    num lastIndex = p.tokens.types.count - 1;
+    if (index > lastIndex) {
+        give p.tokens.types.items[lastIndex];
+    }
+    give p.tokens.types.items[index];
+}
+
+flag parserIsAtEnd(ParserState p) {
+    give parserPeekKind(p) == tokenKindEof();
+}
+
+flag parserCheck(ParserState p, num kind) {
+    give parserPeekKind(p) == kind;
+}
+
+num parserAdvance(ParserState p) {
+    num index = p.current;
+    if (!parserIsAtEnd(p)) {
+        p.current = p.current + 1;
+    }
+    give index;
+}
+
+num parserPrevious(ParserState p) {
+    give p.current - 1;
+}
+
+flag parserMatch(ParserState p, num kind) {
+    if (parserCheck(p, kind)) {
+        parserAdvance(p);
+        give yes;
+    }
+    give no;
+}
+
+// A token's own (line, column) - deliberately NOT adjusted for the token's
+// lexeme length. Token.java carries exactly one SourceLocation (its start)
+// and nothing else; every `new SourceRange(..., someToken.location())` and
+// every `SourceRange.point(someToken.location())` call site in Parser.java
+// (confirmed by reading every "new SourceRange("/"SourceRange.point(" call
+// site directly) uses that raw location verbatim as an endpoint, never
+// start-plus-length-minus-one. A multi-character token's range therefore
+// "ends" at its own start column, not its last character - e.g. an
+// identifier `count` at column 5 contributes column 5 as an endpoint, not
+// column 9. tokenEndLine/tokenEndCol exist only so call sites read as "the
+// position this token contributes to a range", not because they compute
+// anything beyond the token's already-stored location.
+num tokenEndLine(ParserState p, num tokenIndex) {
+    give p.tokens.lines.items[tokenIndex];
+}
+
+num tokenEndCol(ParserState p, num tokenIndex) {
+    give p.tokens.columns.items[tokenIndex];
+}
+
+// ---------------------------------------------------------------------
+// Diagnostics
+// ---------------------------------------------------------------------
+
+text parserDescribeMismatch(ParserState p, text baseMessage) {
+    if (parserIsAtEnd(p)) {
+        give baseMessage + " (reached end of file)";
+    }
+    give baseMessage + ", found '" + p.tokens.lexemes.items[p.current] + "'";
+}
+
+// Records a diagnostic at an explicit (line, column) and returns -1 - the
+// one sentinel every failing parseXxx()/parserConsume() call propagates
+// upward. Every call site that can fail is written as
+// "give parserErrorAt(p, ..., "...");" so the -1 return and the diagnostic
+// report happen together, never one without the other.
+num parserErrorAt(ParserState p, num line, num col, text message) {
+    diagnosticBufferAppend(p.diagnostics, "Syntax Error", line, col, message, "");
+    give -1;
+}
+
+// The common case: report at the current (unconsumed, still-peeked) token's
+// own start position - matches every `SourceRange.point(peek().location())`
+// ParseError site in Parser.java (parseElementType's "expected a type",
+// parsePrimary's "expected an expression", and consume()'s own mismatch).
+num parserError(ParserState p, text message) {
+    give parserErrorAt(p, p.tokens.lines.items[p.current], p.tokens.columns.items[p.current], message);
+}
+
+// consume(): the direct equivalent of Parser.java's consume(type, message) -
+// advances and returns the consumed token's index on a match, else reports
+// a mismatch-described error and returns -1.
+num parserConsume(ParserState p, num kind, text message) {
+    if (parserCheck(p, kind)) {
+        give parserAdvance(p);
+    }
+    give parserError(p, parserDescribeMismatch(p, message));
+}
+
+// ---------------------------------------------------------------------
+// synchronize(insideBlock) - panic-mode recovery, ported verbatim from
+// Parser.java's own synchronize(). insideBlock distinguishes recovering
+// inside a block/struct body (where a stray '}' must NOT be consumed, since
+// the enclosing loop needs to see it and stop) from recovering at the top
+// level (where there is no enclosing '}' to preserve).
+// ---------------------------------------------------------------------
+
+flag isStatementStartKeywordKind(num kind) {
+    give kind == tokenKindKwIf() || kind == tokenKindKwWhile() || kind == tokenKindKwFor()
+            || kind == tokenKindKwReturn() || kind == tokenKindKwPrint() || kind == tokenKindKwStruct()
+            || kind == tokenKindKwInt() || kind == tokenKindKwFloat() || kind == tokenKindKwBool()
+            || kind == tokenKindKwString() || kind == tokenKindKwVoid();
+}
+
+none parserSynchronize(ParserState p, flag insideBlock) {
+    if (insideBlock && parserCheck(p, tokenKindRightBrace())) {
+        give;
+    }
+    parserAdvance(p);
+    loop (!parserIsAtEnd(p)) {
+        if (p.tokens.types.items[parserPrevious(p)] == tokenKindSemicolon()) {
+            give;
+        }
+        if (insideBlock && parserCheck(p, tokenKindRightBrace())) {
+            give;
+        }
+        if (isStatementStartKeywordKind(parserPeekKind(p))) {
+            give;
+        }
+        parserAdvance(p);
+    }
+}
+
+// ---------------------------------------------------------------------
+// Declared types - parseDeclaredType() is the one production used for every
+// type position (field, parameter, return type, variable), exactly as
+// documented for Parser.java's own parseDeclaredType(). Sets the arena
+// node's type columns directly via arenaSetType(); callers that only need
+// the raw (elem, isArray, structName) triple without an arena node yet
+// (e.g. Parameter, which needs the type before the Parameter node itself
+// can be allocated) read the three out-parameters via the num[]/text[]
+// slots this function fills in the caller-supplied "out" arrays.
+// ---------------------------------------------------------------------
+
+num primTypeFromKeywordKind(num kind) {
+    if (kind == tokenKindKwInt()) { give primTypeInt(); }
+    if (kind == tokenKindKwFloat()) { give primTypeFloat(); }
+    if (kind == tokenKindKwBool()) { give primTypeBool(); }
+    if (kind == tokenKindKwString()) { give primTypeString(); }
+    if (kind == tokenKindKwVoid()) { give primTypeVoid(); }
+    give -1;
+}
+
+flag isElementTypeKeywordKind(num kind) {
+    give kind == tokenKindKwInt() || kind == tokenKindKwFloat() || kind == tokenKindKwBool()
+            || kind == tokenKindKwString() || kind == tokenKindKwVoid();
+}
+
+// Out-parameter carrier for parseDeclaredType()/parseType()/
+// parseElementType() - three primitive-typed "return slots" the caller
+// pre-allocates once and every parse*Type() call overwrites. GopiLang has no
+// tuple/multi-return, so a small mutable struct standing in for one is this
+// file's equivalent of VectorNum's "no generics -> duplicate a purpose-built
+// type" idiom, applied to a fixed 3-tuple instead of a growable list.
+struct TypeSlots {
+    num elem;
+    num isArray;
+    text structName;
+}
+
+TypeSlots typeSlotsCreate() {
+    give new TypeSlots(-1, 0, "");
+}
+
+// give -1 on failure (a type was expected but not found); the failure has
+// already been reported via parserError() by the time this returns.
+num parseElementType(ParserState p, TypeSlots out) {
+    if (isElementTypeKeywordKind(parserPeekKind(p))) {
+        num tok = parserAdvance(p);
+        out.elem = primTypeFromKeywordKind(p.tokens.types.items[tok]);
+        out.isArray = 0;
+        out.structName = "";
+        give 0;
+    }
+    give parserError(p, "expected a type");
+}
+
+num parseType(ParserState p, TypeSlots out) {
+    if (parseElementType(p, out) == -1) {
+        give -1;
+    }
+    if (parserMatch(p, tokenKindLeftBracket())) {
+        if (parserConsume(p, tokenKindRightBracket(), "expected ']' after '[' in array type") == -1) {
+            give -1;
+        }
+        out.isArray = 1;
+    }
+    give 0;
+}
+
+num parseDeclaredType(ParserState p, TypeSlots out) {
+    if (parserCheck(p, tokenKindIdentifier())) {
+        num nameTok = parserAdvance(p);
+        out.elem = primTypeBool();
+        out.isArray = 0;
+        out.structName = p.tokens.lexemes.items[nameTok];
+        if (parserMatch(p, tokenKindLeftBracket())) {
+            if (parserConsume(p, tokenKindRightBracket(), "expected ']' after '[' in array type") == -1) {
+                give -1;
+            }
+            out.isArray = 1;
+        }
+        give 0;
+    }
+    give parseType(p, out);
+}
+
+// ---------------------------------------------------------------------
+// Top-level: parseProgram()
+// ---------------------------------------------------------------------
+
+num parseProgram(ParserState p) {
+    num startLine = p.tokens.lines.items[p.current];
+    num startCol = p.tokens.columns.items[p.current];
+    VectorNum functionIds = vectorNumCreate();
+    VectorNum structIds = vectorNumCreate();
+
+    loop (!parserIsAtEnd(p)) {
+        if (parserCheck(p, tokenKindKwStruct())) {
+            num structId = parseStructDeclaration(p);
+            if (structId == -1) {
+                parserSynchronize(p, no);
+            } else {
+                vectorNumPush(structIds, structId);
+            }
+        } else {
+            num functionId = parseFunction(p);
+            if (functionId == -1) {
+                parserSynchronize(p, no);
+            } else {
+                vectorNumPush(functionIds, functionId);
+            }
+        }
+    }
+
+    // Matches Java's `(functions.isEmpty() && structs.isEmpty()) ? start :
+    // previous().location()` exactly - the condition is whether the
+    // resulting LISTS ended up empty, not whether the token cursor moved.
+    // A program whose only top-level item fails to parse can still have
+    // consumed many tokens (through the failed attempt and synchronize()'s
+    // own recovery skipping), while functions/structs stay empty the whole
+    // time - previous() would be some arbitrary mid-source token in that
+    // case, not a meaningful "end" for an otherwise-empty Program.
+    num endLine = startLine;
+    num endCol = startCol;
+    if (functionIds.count > 0 || structIds.count > 0) {
+        num lastTok = parserPrevious(p);
+        endLine = tokenEndLine(p, lastTok);
+        endCol = tokenEndCol(p, lastTok);
+    }
+
+    num id = arenaAlloc(p.arena, nodeKindProgram(), startLine, startCol, endLine, endCol);
+
+    num funcStart = arenaChildPoolBegin(p.arena);
+    num i = 0;
+    loop (i < functionIds.count) {
+        arenaChildPoolPush(p.arena, functionIds.items[i]);
+        i = i + 1;
+    }
+    arenaSetList1(p.arena, id, funcStart, functionIds.count);
+
+    num structStart = arenaChildPoolBegin(p.arena);
+    num j = 0;
+    loop (j < structIds.count) {
+        arenaChildPoolPush(p.arena, structIds.items[j]);
+        j = j + 1;
+    }
+    arenaSetList2(p.arena, id, structStart, structIds.count);
+
+    give id;
+}
+
+// ---------------------------------------------------------------------
+// Function declarations
+// ---------------------------------------------------------------------
+
+num parseFunction(ParserState p) {
+    num startLine = p.tokens.lines.items[p.current];
+    num startCol = p.tokens.columns.items[p.current];
+
+    TypeSlots returnType = typeSlotsCreate();
+    if (parseDeclaredType(p, returnType) == -1) {
+        give -1;
+    }
+    num nameTok = parserConsume(p, tokenKindIdentifier(), "expected a function name");
+    if (nameTok == -1) {
+        give -1;
+    }
+    text name = p.tokens.lexemes.items[nameTok];
+
+    if (parserConsume(p, tokenKindLeftParen(), "expected '(' after function name") == -1) {
+        give -1;
+    }
+    num paramsStart = arenaChildPoolBegin(p.arena);
+    num paramCount = 0;
+    if (!parserCheck(p, tokenKindRightParen())) {
+        flag more = yes;
+        loop (more) {
+            num paramId = parseParameter(p);
+            if (paramId == -1) {
+                give -1;
+            }
+            arenaChildPoolPush(p.arena, paramId);
+            paramCount = paramCount + 1;
+            more = parserMatch(p, tokenKindComma());
+        }
+    }
+    if (parserConsume(p, tokenKindRightParen(), "expected ')' after parameters") == -1) {
+        give -1;
+    }
+
+    num bodyId = parseBlock(p);
+    if (bodyId == -1) {
+        give -1;
+    }
+
+    num id = arenaAlloc(p.arena, nodeKindFunctionDeclaration(), startLine, startCol,
+            arenaEndLine(p.arena, bodyId), arenaEndCol(p.arena, bodyId));
+    arenaSetType(p.arena, id, returnType.elem, returnType.isArray, returnType.structName);
+    arenaSetText0(p.arena, id, name);
+    arenaSetList1(p.arena, id, paramsStart, paramCount);
+    arenaSetChild1(p.arena, id, bodyId);
+    give id;
+}
+
+num parseParameter(ParserState p) {
+    num startLine = p.tokens.lines.items[p.current];
+    num startCol = p.tokens.columns.items[p.current];
+    TypeSlots type = typeSlotsCreate();
+    if (parseDeclaredType(p, type) == -1) {
+        give -1;
+    }
+    num nameTok = parserConsume(p, tokenKindIdentifier(), "expected a variable name");
+    if (nameTok == -1) {
+        give -1;
+    }
+    num id = arenaAlloc(p.arena, nodeKindParameter(), startLine, startCol,
+            tokenEndLine(p, nameTok), tokenEndCol(p, nameTok));
+    arenaSetType(p.arena, id, type.elem, type.isArray, type.structName);
+    arenaSetText0(p.arena, id, p.tokens.lexemes.items[nameTok]);
+    give id;
+}
+
+// ---------------------------------------------------------------------
+// Struct declarations
+// ---------------------------------------------------------------------
+
+num parseStructDeclaration(ParserState p) {
+    num startLine = p.tokens.lines.items[p.current];
+    num startCol = p.tokens.columns.items[p.current];
+    if (parserConsume(p, tokenKindKwStruct(), "expected 'struct'") == -1) {
+        give -1;
+    }
+    num nameTok = parserConsume(p, tokenKindIdentifier(), "expected a struct name");
+    if (nameTok == -1) {
+        give -1;
+    }
+    text name = p.tokens.lexemes.items[nameTok];
+
+    if (parserConsume(p, tokenKindLeftBrace(), "expected '{' to start a struct body") == -1) {
+        give -1;
+    }
+
+    VectorNum fieldIds = vectorNumCreate();
+    loop (!parserCheck(p, tokenKindRightBrace()) && !parserIsAtEnd(p)) {
+        num fieldId = parseField(p);
+        if (fieldId == -1) {
+            parserSynchronize(p, yes);
+        } else {
+            vectorNumPush(fieldIds, fieldId);
+        }
+    }
+
+    num closeTok = parserConsume(p, tokenKindRightBrace(), "expected '}' to end a struct body");
+    if (closeTok == -1) {
+        give -1;
+    }
+
+    num id = arenaAlloc(p.arena, nodeKindStructDeclaration(), startLine, startCol,
+            tokenEndLine(p, closeTok), tokenEndCol(p, closeTok));
+    arenaSetText0(p.arena, id, name);
+    num fieldStart = arenaChildPoolBegin(p.arena);
+    num i = 0;
+    loop (i < fieldIds.count) {
+        arenaChildPoolPush(p.arena, fieldIds.items[i]);
+        i = i + 1;
+    }
+    arenaSetList1(p.arena, id, fieldStart, fieldIds.count);
+    give id;
+}
+
+// Fields reuse Parameter verbatim - no separate "Field" AST node, exactly
+// as Parser.java does.
+num parseField(ParserState p) {
+    num startLine = p.tokens.lines.items[p.current];
+    num startCol = p.tokens.columns.items[p.current];
+    TypeSlots type = typeSlotsCreate();
+    if (parseDeclaredType(p, type) == -1) {
+        give -1;
+    }
+    num nameTok = parserConsume(p, tokenKindIdentifier(), "expected a field name");
+    if (nameTok == -1) {
+        give -1;
+    }
+    num semiTok = parserConsume(p, tokenKindSemicolon(), "expected ';' after field declaration");
+    if (semiTok == -1) {
+        give -1;
+    }
+    num id = arenaAlloc(p.arena, nodeKindParameter(), startLine, startCol,
+            tokenEndLine(p, semiTok), tokenEndCol(p, semiTok));
+    arenaSetType(p.arena, id, type.elem, type.isArray, type.structName);
+    arenaSetText0(p.arena, id, p.tokens.lexemes.items[nameTok]);
+    give id;
+}
+
+// ---------------------------------------------------------------------
+// Blocks and statements
+// ---------------------------------------------------------------------
+
+num parseBlock(ParserState p) {
+    num openTok = parserConsume(p, tokenKindLeftBrace(), "expected '{' to start a block");
+    if (openTok == -1) {
+        give -1;
+    }
+    num startLine = tokenEndLine(p, openTok);
+    num startCol = p.tokens.columns.items[openTok];
+
+    VectorNum stmtIds = vectorNumCreate();
+    loop (!parserCheck(p, tokenKindRightBrace()) && !parserIsAtEnd(p)) {
+        num stmtId = parseStatement(p);
+        if (stmtId == -1) {
+            parserSynchronize(p, yes);
+        } else {
+            vectorNumPush(stmtIds, stmtId);
+        }
+    }
+
+    num closeTok = parserConsume(p, tokenKindRightBrace(), "expected '}' to end a block");
+    if (closeTok == -1) {
+        give -1;
+    }
+
+    num id = arenaAlloc(p.arena, nodeKindBlockStatement(), startLine, startCol,
+            tokenEndLine(p, closeTok), tokenEndCol(p, closeTok));
+    num stmtStart = arenaChildPoolBegin(p.arena);
+    num i = 0;
+    loop (i < stmtIds.count) {
+        arenaChildPoolPush(p.arena, stmtIds.items[i]);
+        i = i + 1;
+    }
+    arenaSetList1(p.arena, id, stmtStart, stmtIds.count);
+    give id;
+}
+
+// A struct-typed variable declaration's start ("Point p;" / "Point[] arr;")
+// looks, for its first token, exactly like the start of an assignment
+// expression statement ("p = 5;" / "arr[i] = 5;") - both begin with a bare
+// IDENTIFIER. Disambiguated the same way Parser.java's own
+// isStructTypedDeclarationStart() does: an IDENTIFIER followed by either
+// another IDENTIFIER (the variable's own name), or '[' ']' (an array-typed
+// declaration's brackets) - never backtracking, just 1-2 tokens of
+// lookahead.
+flag isStructTypedDeclarationStart(ParserState p) {
+    if (!parserCheck(p, tokenKindIdentifier())) {
+        give no;
+    }
+    if (parserPeekKindAt(p, 1) == tokenKindIdentifier()) {
+        give yes;
+    }
+    give parserPeekKindAt(p, 1) == tokenKindLeftBracket() && parserPeekKindAt(p, 2) == tokenKindRightBracket();
+}
+
+flag isTypeKeywordStart(ParserState p) {
+    give isElementTypeKeywordKind(parserPeekKind(p));
+}
+
+num parseStatement(ParserState p) {
+    if (parserCheck(p, tokenKindKwIf())) {
+        give parseIfStatement(p);
+    }
+    if (parserCheck(p, tokenKindKwWhile())) {
+        give parseWhileStatement(p);
+    }
+    if (parserCheck(p, tokenKindKwFor())) {
+        give parseForStatement(p);
+    }
+    if (parserCheck(p, tokenKindKwReturn())) {
+        give parseReturnStatement(p);
+    }
+    if (parserCheck(p, tokenKindKwPrint())) {
+        give parsePrintStatement(p);
+    }
+    if (parserCheck(p, tokenKindLeftBrace())) {
+        give parseBlock(p);
+    }
+    if (isTypeKeywordStart(p) || isStructTypedDeclarationStart(p)) {
+        give parseVariableDeclaration(p);
+    }
+    give parseExpressionStatement(p);
+}
+
+num parseVariableDeclaration(ParserState p) {
+    num startLine = p.tokens.lines.items[p.current];
+    num startCol = p.tokens.columns.items[p.current];
+    TypeSlots type = typeSlotsCreate();
+    if (parseDeclaredType(p, type) == -1) {
+        give -1;
+    }
+    num nameTok = parserConsume(p, tokenKindIdentifier(), "expected a variable name");
+    if (nameTok == -1) {
+        give -1;
+    }
+    num initId = -1;
+    if (parserMatch(p, tokenKindAssign())) {
+        initId = parseExpression(p);
+        if (initId == -1) {
+            give -1;
+        }
+    }
+    num semiTok = parserConsume(p, tokenKindSemicolon(), "expected ';' after variable declaration");
+    if (semiTok == -1) {
+        give -1;
+    }
+    num id = arenaAlloc(p.arena, nodeKindVariableDeclaration(), startLine, startCol,
+            tokenEndLine(p, semiTok), tokenEndCol(p, semiTok));
+    arenaSetType(p.arena, id, type.elem, type.isArray, type.structName);
+    arenaSetText0(p.arena, id, p.tokens.lexemes.items[nameTok]);
+    arenaSetChild1(p.arena, id, initId);
+    give id;
+}
+
+num parseReturnStatement(ParserState p) {
+    num startTok = parserConsume(p, tokenKindKwReturn(), "expected 'give'");
+    if (startTok == -1) {
+        give -1;
+    }
+    num valueId = -1;
+    if (!parserCheck(p, tokenKindSemicolon())) {
+        valueId = parseExpression(p);
+        if (valueId == -1) {
+            give -1;
+        }
+    }
+    num semiTok = parserConsume(p, tokenKindSemicolon(), "expected ';' after return statement");
+    if (semiTok == -1) {
+        give -1;
+    }
+    num id = arenaAlloc(p.arena, nodeKindReturnStatement(), p.tokens.lines.items[startTok],
+            p.tokens.columns.items[startTok], tokenEndLine(p, semiTok), tokenEndCol(p, semiTok));
+    arenaSetChild1(p.arena, id, valueId);
+    give id;
+}
+
+num parsePrintStatement(ParserState p) {
+    num startTok = parserConsume(p, tokenKindKwPrint(), "expected 'show'");
+    if (startTok == -1) {
+        give -1;
+    }
+    if (parserConsume(p, tokenKindLeftParen(), "expected '(' after 'show'") == -1) {
+        give -1;
+    }
+    num valueId = parseExpression(p);
+    if (valueId == -1) {
+        give -1;
+    }
+    if (parserConsume(p, tokenKindRightParen(), "expected ')' after expression") == -1) {
+        give -1;
+    }
+    num semiTok = parserConsume(p, tokenKindSemicolon(), "expected ';' after show statement");
+    if (semiTok == -1) {
+        give -1;
+    }
+    num id = arenaAlloc(p.arena, nodeKindPrintStatement(), p.tokens.lines.items[startTok],
+            p.tokens.columns.items[startTok], tokenEndLine(p, semiTok), tokenEndCol(p, semiTok));
+    arenaSetChild1(p.arena, id, valueId);
+    give id;
+}
+
+num parseIfStatement(ParserState p) {
+    num startTok = parserConsume(p, tokenKindKwIf(), "expected 'if'");
+    if (startTok == -1) {
+        give -1;
+    }
+    if (parserConsume(p, tokenKindLeftParen(), "expected '(' after 'if'") == -1) {
+        give -1;
+    }
+    num conditionId = parseExpression(p);
+    if (conditionId == -1) {
+        give -1;
+    }
+    if (parserConsume(p, tokenKindRightParen(), "expected ')' after condition") == -1) {
+        give -1;
+    }
+    num thenId = parseStatement(p);
+    if (thenId == -1) {
+        give -1;
+    }
+    num elseId = -1;
+    num endLine = arenaEndLine(p.arena, thenId);
+    num endCol = arenaEndCol(p.arena, thenId);
+    if (parserMatch(p, tokenKindKwElse())) {
+        elseId = parseStatement(p);
+        if (elseId == -1) {
+            give -1;
+        }
+        endLine = arenaEndLine(p.arena, elseId);
+        endCol = arenaEndCol(p.arena, elseId);
+    }
+    num id = arenaAlloc(p.arena, nodeKindIfStatement(), p.tokens.lines.items[startTok],
+            p.tokens.columns.items[startTok], endLine, endCol);
+    arenaSetChild1(p.arena, id, conditionId);
+    arenaSetChild2(p.arena, id, thenId);
+    arenaSetChild3(p.arena, id, elseId);
+    give id;
+}
+
+num parseWhileStatement(ParserState p) {
+    num startTok = parserConsume(p, tokenKindKwWhile(), "expected 'loop'");
+    if (startTok == -1) {
+        give -1;
+    }
+    if (parserConsume(p, tokenKindLeftParen(), "expected '(' after 'loop'") == -1) {
+        give -1;
+    }
+    num conditionId = parseExpression(p);
+    if (conditionId == -1) {
+        give -1;
+    }
+    if (parserConsume(p, tokenKindRightParen(), "expected ')' after condition") == -1) {
+        give -1;
+    }
+    num bodyId = parseStatement(p);
+    if (bodyId == -1) {
+        give -1;
+    }
+    num id = arenaAlloc(p.arena, nodeKindWhileStatement(), p.tokens.lines.items[startTok],
+            p.tokens.columns.items[startTok], arenaEndLine(p.arena, bodyId), arenaEndCol(p.arena, bodyId));
+    arenaSetChild1(p.arena, id, conditionId);
+    arenaSetChild2(p.arena, id, bodyId);
+    give id;
+}
+
+num parseExpressionStatement(ParserState p) {
+    num startLine = p.tokens.lines.items[p.current];
+    num startCol = p.tokens.columns.items[p.current];
+    num exprId = parseExpression(p);
+    if (exprId == -1) {
+        give -1;
+    }
+    num semiTok = parserConsume(p, tokenKindSemicolon(), "expected ';' after expression");
+    if (semiTok == -1) {
+        give -1;
+    }
+    num id = arenaAlloc(p.arena, nodeKindExpressionStatement(), startLine, startCol,
+            tokenEndLine(p, semiTok), tokenEndCol(p, semiTok));
+    arenaSetChild1(p.arena, id, exprId);
+    give id;
+}
+
+// for-init shares parseStatement()'s own decl-vs-expr dispatch, but returns
+// a bare Stmt: the variable-declaration path consumes its own trailing ';'
+// (parseVariableDeclaration already does), and the expression path consumes
+// its trailing ';' itself too (mirroring parseForInit() in Parser.java,
+// which does NOT delegate to parseExpressionStatement() for the increment
+// clause - see parseForStatement() below, which parses the increment as a
+// bare expression with no ';' of its own).
+num parseForInit(ParserState p) {
+    if (isTypeKeywordStart(p) || isStructTypedDeclarationStart(p)) {
+        give parseVariableDeclaration(p);
+    }
+    give parseExpressionStatement(p);
+}
+
+// for (init; condition; increment) body desugars to:
+//   { init; while (condition) { body; increment; } }
+// producing ZERO new node kinds - downstream stages never see a for-loop,
+// exactly as Parser.java's own parseForStatement() does. All three
+// synthesized nodes (outer Block, While, inner Block) reuse the SAME outer
+// source range end-to-end (not individually tightened around init/
+// condition/body), matching Parser.java's own choice there.
+num parseForStatement(ParserState p) {
+    num startTok = parserConsume(p, tokenKindKwFor(), "expected 'run'");
+    if (startTok == -1) {
+        give -1;
+    }
+    if (parserConsume(p, tokenKindLeftParen(), "expected '(' after 'run'") == -1) {
+        give -1;
+    }
+    num initId = parseForInit(p);
+    if (initId == -1) {
+        give -1;
+    }
+    num conditionId = parseExpression(p);
+    if (conditionId == -1) {
+        give -1;
+    }
+    if (parserConsume(p, tokenKindSemicolon(), "expected ';' after loop condition") == -1) {
+        give -1;
+    }
+    num incrementId = parseExpression(p);
+    if (incrementId == -1) {
+        give -1;
+    }
+    num closeTok = parserConsume(p, tokenKindRightParen(), "expected ')' after for-loop clauses");
+    if (closeTok == -1) {
+        give -1;
+    }
+    num bodyId = parseStatement(p);
+    if (bodyId == -1) {
+        give -1;
+    }
+
+    num startLine = p.tokens.lines.items[startTok];
+    num startCol = p.tokens.columns.items[startTok];
+    num endLine = arenaEndLine(p.arena, bodyId);
+    num endCol = arenaEndCol(p.arena, bodyId);
+
+    num incrementStmtId = arenaAlloc(p.arena, nodeKindExpressionStatement(), startLine, startCol, endLine, endCol);
+    arenaSetChild1(p.arena, incrementStmtId, incrementId);
+
+    num innerBlockId = arenaAlloc(p.arena, nodeKindBlockStatement(), startLine, startCol, endLine, endCol);
+    num innerStart = arenaChildPoolBegin(p.arena);
+    arenaChildPoolPush(p.arena, bodyId);
+    arenaChildPoolPush(p.arena, incrementStmtId);
+    arenaSetList1(p.arena, innerBlockId, innerStart, 2);
+
+    num whileId = arenaAlloc(p.arena, nodeKindWhileStatement(), startLine, startCol, endLine, endCol);
+    arenaSetChild1(p.arena, whileId, conditionId);
+    arenaSetChild2(p.arena, whileId, innerBlockId);
+
+    num outerBlockId = arenaAlloc(p.arena, nodeKindBlockStatement(), startLine, startCol, endLine, endCol);
+    num outerStart = arenaChildPoolBegin(p.arena);
+    arenaChildPoolPush(p.arena, initId);
+    arenaChildPoolPush(p.arena, whileId);
+    arenaSetList1(p.arena, outerBlockId, outerStart, 2);
+
+    give outerBlockId;
+}
+
+// ---------------------------------------------------------------------
+// Expressions - full precedence ladder, lowest to highest binding:
+//   parseExpression -> parseAssignment (= , right-assoc)
+//                    -> parseLogicalOr (||)
+//                    -> parseLogicalAnd (&&)
+//                    -> parseEquality (== !=)
+//                    -> parseComparison (< > <= >=)
+//                    -> parseTerm (+ -)
+//                    -> parseFactor (* / %)
+//                    -> parseUnary (! - , right-assoc prefix)
+//                    -> parseCall (postfix () [] .len() .field chain)
+//                    -> parsePrimary (literals, identifiers, grouping, new)
+// ---------------------------------------------------------------------
+
+num parseExpression(ParserState p) {
+    give parseAssignment(p);
+}
+
+num parseAssignment(ParserState p) {
+    num target = parseLogicalOr(p);
+    if (target == -1) {
+        give -1;
+    }
+    if (parserMatch(p, tokenKindAssign())) {
+        num value = parseAssignment(p);
+        if (value == -1) {
+            give -1;
+        }
+        num kind = arenaKind(p.arena, target);
+        num id = -1;
+        if (kind == nodeKindVariableExpression()) {
+            id = arenaAlloc(p.arena, nodeKindAssignmentExpression(), arenaStartLine(p.arena, target),
+                    arenaStartCol(p.arena, target), arenaEndLine(p.arena, value), arenaEndCol(p.arena, value));
+            arenaSetText0(p.arena, id, arenaText0(p.arena, target));
+            arenaSetChild1(p.arena, id, value);
+        } else if (kind == nodeKindArrayAccessExpression()) {
+            id = arenaAlloc(p.arena, nodeKindIndexAssignmentExpression(), arenaStartLine(p.arena, target),
+                    arenaStartCol(p.arena, target), arenaEndLine(p.arena, value), arenaEndCol(p.arena, value));
+            arenaSetChild1(p.arena, id, arenaChild1(p.arena, target));
+            arenaSetChild2(p.arena, id, arenaChild2(p.arena, target));
+            arenaSetChild3(p.arena, id, value);
+        } else if (kind == nodeKindFieldAccessExpression()) {
+            id = arenaAlloc(p.arena, nodeKindFieldAssignmentExpression(), arenaStartLine(p.arena, target),
+                    arenaStartCol(p.arena, target), arenaEndLine(p.arena, value), arenaEndCol(p.arena, value));
+            arenaSetChild1(p.arena, id, arenaChild1(p.arena, target));
+            arenaSetChild2(p.arena, id, value);
+            arenaSetText0(p.arena, id, arenaText0(p.arena, target));
+        } else {
+            // Matches Java's `throw new ParseError("invalid assignment
+            // target", expr.range())` - reported at the target expression's
+            // OWN range (its start), not at the '=' token that triggered
+            // this check.
+            give parserErrorAt(p, arenaStartLine(p.arena, target), arenaStartCol(p.arena, target),
+                    "invalid assignment target");
+        }
+        give id;
+    }
+    give target;
+}
+
+num parseLogicalOr(ParserState p) {
+    num left = parseLogicalAnd(p);
+    if (left == -1) {
+        give -1;
+    }
+    loop (parserCheck(p, tokenKindOrOr())) {
+        parserAdvance(p);
+        num right = parseLogicalAnd(p);
+        if (right == -1) {
+            give -1;
+        }
+        num id = arenaAlloc(p.arena, nodeKindBinaryExpression(), arenaStartLine(p.arena, left),
+                arenaStartCol(p.arena, left), arenaEndLine(p.arena, right), arenaEndCol(p.arena, right));
+        arenaSetChild1(p.arena, id, left);
+        arenaSetChild2(p.arena, id, right);
+        arenaSetOperator(p.arena, id, binaryOpOr());
+        left = id;
+    }
+    give left;
+}
+
+num parseLogicalAnd(ParserState p) {
+    num left = parseEquality(p);
+    if (left == -1) {
+        give -1;
+    }
+    loop (parserCheck(p, tokenKindAndAnd())) {
+        parserAdvance(p);
+        num right = parseEquality(p);
+        if (right == -1) {
+            give -1;
+        }
+        num id = arenaAlloc(p.arena, nodeKindBinaryExpression(), arenaStartLine(p.arena, left),
+                arenaStartCol(p.arena, left), arenaEndLine(p.arena, right), arenaEndCol(p.arena, right));
+        arenaSetChild1(p.arena, id, left);
+        arenaSetChild2(p.arena, id, right);
+        arenaSetOperator(p.arena, id, binaryOpAnd());
+        left = id;
+    }
+    give left;
+}
+
+num binaryOpFromEqualityKind(num kind) {
+    if (kind == tokenKindEqualEqual()) { give binaryOpEqual(); }
+    give binaryOpNotEqual();
+}
+
+num parseEquality(ParserState p) {
+    num left = parseComparison(p);
+    if (left == -1) {
+        give -1;
+    }
+    loop (parserCheck(p, tokenKindEqualEqual()) || parserCheck(p, tokenKindBangEqual())) {
+        num opTok = parserAdvance(p);
+        num right = parseComparison(p);
+        if (right == -1) {
+            give -1;
+        }
+        num id = arenaAlloc(p.arena, nodeKindBinaryExpression(), arenaStartLine(p.arena, left),
+                arenaStartCol(p.arena, left), arenaEndLine(p.arena, right), arenaEndCol(p.arena, right));
+        arenaSetChild1(p.arena, id, left);
+        arenaSetChild2(p.arena, id, right);
+        arenaSetOperator(p.arena, id, binaryOpFromEqualityKind(p.tokens.types.items[opTok]));
+        left = id;
+    }
+    give left;
+}
+
+num binaryOpFromComparisonKind(num kind) {
+    if (kind == tokenKindLess()) { give binaryOpLess(); }
+    if (kind == tokenKindGreater()) { give binaryOpGreater(); }
+    if (kind == tokenKindLessEqual()) { give binaryOpLessEqual(); }
+    give binaryOpGreaterEqual();
+}
+
+num parseComparison(ParserState p) {
+    num left = parseTerm(p);
+    if (left == -1) {
+        give -1;
+    }
+    loop (parserCheck(p, tokenKindLess()) || parserCheck(p, tokenKindGreater())
+            || parserCheck(p, tokenKindLessEqual()) || parserCheck(p, tokenKindGreaterEqual())) {
+        num opTok = parserAdvance(p);
+        num right = parseTerm(p);
+        if (right == -1) {
+            give -1;
+        }
+        num id = arenaAlloc(p.arena, nodeKindBinaryExpression(), arenaStartLine(p.arena, left),
+                arenaStartCol(p.arena, left), arenaEndLine(p.arena, right), arenaEndCol(p.arena, right));
+        arenaSetChild1(p.arena, id, left);
+        arenaSetChild2(p.arena, id, right);
+        arenaSetOperator(p.arena, id, binaryOpFromComparisonKind(p.tokens.types.items[opTok]));
+        left = id;
+    }
+    give left;
+}
+
+num binaryOpFromTermKind(num kind) {
+    if (kind == tokenKindPlus()) { give binaryOpAdd(); }
+    give binaryOpSubtract();
+}
+
+num parseTerm(ParserState p) {
+    num left = parseFactor(p);
+    if (left == -1) {
+        give -1;
+    }
+    loop (parserCheck(p, tokenKindPlus()) || parserCheck(p, tokenKindMinus())) {
+        num opTok = parserAdvance(p);
+        num right = parseFactor(p);
+        if (right == -1) {
+            give -1;
+        }
+        num id = arenaAlloc(p.arena, nodeKindBinaryExpression(), arenaStartLine(p.arena, left),
+                arenaStartCol(p.arena, left), arenaEndLine(p.arena, right), arenaEndCol(p.arena, right));
+        arenaSetChild1(p.arena, id, left);
+        arenaSetChild2(p.arena, id, right);
+        arenaSetOperator(p.arena, id, binaryOpFromTermKind(p.tokens.types.items[opTok]));
+        left = id;
+    }
+    give left;
+}
+
+num binaryOpFromFactorKind(num kind) {
+    if (kind == tokenKindStar()) { give binaryOpMultiply(); }
+    if (kind == tokenKindSlash()) { give binaryOpDivide(); }
+    give binaryOpModulo();
+}
+
+num parseFactor(ParserState p) {
+    num left = parseUnary(p);
+    if (left == -1) {
+        give -1;
+    }
+    loop (parserCheck(p, tokenKindStar()) || parserCheck(p, tokenKindSlash()) || parserCheck(p, tokenKindPercent())) {
+        num opTok = parserAdvance(p);
+        num right = parseUnary(p);
+        if (right == -1) {
+            give -1;
+        }
+        num id = arenaAlloc(p.arena, nodeKindBinaryExpression(), arenaStartLine(p.arena, left),
+                arenaStartCol(p.arena, left), arenaEndLine(p.arena, right), arenaEndCol(p.arena, right));
+        arenaSetChild1(p.arena, id, left);
+        arenaSetChild2(p.arena, id, right);
+        arenaSetOperator(p.arena, id, binaryOpFromFactorKind(p.tokens.types.items[opTok]));
+        left = id;
+    }
+    give left;
+}
+
+num parseUnary(ParserState p) {
+    if (parserCheck(p, tokenKindBang()) || parserCheck(p, tokenKindMinus())) {
+        num opTok = parserAdvance(p);
+        num operandId = parseUnary(p);
+        if (operandId == -1) {
+            give -1;
+        }
+        num op = unaryOpNot();
+        if (p.tokens.types.items[opTok] == tokenKindMinus()) {
+            op = unaryOpNegate();
+        }
+        num id = arenaAlloc(p.arena, nodeKindUnaryExpression(), p.tokens.lines.items[opTok],
+                p.tokens.columns.items[opTok], arenaEndLine(p.arena, operandId), arenaEndCol(p.arena, operandId));
+        arenaSetChild1(p.arena, id, operandId);
+        arenaSetOperator(p.arena, id, op);
+        give id;
+    }
+    give parseCall(p);
+}
+
+// Postfix suffix chain: (), [], .len(), .field - checked in this fixed
+// order every iteration, first match wins, loop ends when nothing matches.
+// Each produced node becomes the new base expr, so a.b[0].c(...) builds up
+// as nested wrapping exactly as Parser.java's own parseCall() does.
+num parseCall(ParserState p) {
+    num expr = parsePrimary(p);
+    if (expr == -1) {
+        give -1;
+    }
+    loop (yes) {
+        if (parserCheck(p, tokenKindLeftParen())) {
+            if (arenaKind(p.arena, expr) != nodeKindVariableExpression()) {
+                // Matches Java's `throw new ParseError("only a plain
+                // function name can be called", expr.range())` - reported at
+                // the callee expression's OWN range (its start), not at the
+                // '(' token that triggered this check.
+                give parserErrorAt(p, arenaStartLine(p.arena, expr), arenaStartCol(p.arena, expr),
+                        "only a plain function name can be called");
+            }
+            parserAdvance(p);
+            ListSlots args = listSlotsCreate();
+            if (parseArguments(p, args) == -1) {
+                give -1;
+            }
+            num closeTok = parserConsume(p, tokenKindRightParen(), "expected ')' after arguments");
+            if (closeTok == -1) {
+                give -1;
+            }
+            num id = arenaAlloc(p.arena, nodeKindFunctionCallExpression(), arenaStartLine(p.arena, expr),
+                    arenaStartCol(p.arena, expr), tokenEndLine(p, closeTok), tokenEndCol(p, closeTok));
+            arenaSetText0(p.arena, id, arenaText0(p.arena, expr));
+            arenaSetList1(p.arena, id, args.start, args.count);
+            expr = id;
+        } else if (parserCheck(p, tokenKindLeftBracket())) {
+            parserAdvance(p);
+            num indexId = parseExpression(p);
+            if (indexId == -1) {
+                give -1;
+            }
+            num closeTok = parserConsume(p, tokenKindRightBracket(), "expected ']' after array index");
+            if (closeTok == -1) {
+                give -1;
+            }
+            num id = arenaAlloc(p.arena, nodeKindArrayAccessExpression(), arenaStartLine(p.arena, expr),
+                    arenaStartCol(p.arena, expr), tokenEndLine(p, closeTok), tokenEndCol(p, closeTok));
+            arenaSetChild1(p.arena, id, expr);
+            arenaSetChild2(p.arena, id, indexId);
+            expr = id;
+        } else if (parserCheck(p, tokenKindDot())) {
+            parserAdvance(p);
+            num fieldTok = parserConsume(p, tokenKindIdentifier(), "expected a field name after '.'");
+            if (fieldTok == -1) {
+                give -1;
+            }
+            text fieldName = p.tokens.lexemes.items[fieldTok];
+            if (fieldName == "len" && parserCheck(p, tokenKindLeftParen())) {
+                parserAdvance(p);
+                num closeTok = parserConsume(p, tokenKindRightParen(), "expected ')' after 'len('");
+                if (closeTok == -1) {
+                    give -1;
+                }
+                num id = arenaAlloc(p.arena, nodeKindArrayLengthExpression(), arenaStartLine(p.arena, expr),
+                        arenaStartCol(p.arena, expr), tokenEndLine(p, closeTok), tokenEndCol(p, closeTok));
+                arenaSetChild1(p.arena, id, expr);
+                expr = id;
+            } else {
+                num id = arenaAlloc(p.arena, nodeKindFieldAccessExpression(), arenaStartLine(p.arena, expr),
+                        arenaStartCol(p.arena, expr), tokenEndLine(p, fieldTok), tokenEndCol(p, fieldTok));
+                arenaSetChild1(p.arena, id, expr);
+                arenaSetText0(p.arena, id, fieldName);
+                expr = id;
+            }
+        } else {
+            give expr;
+        }
+    }
+    give expr;
+}
+
+// Out-parameter carrier for parseArguments() - see the note on it below for
+// why a list can't be pushed onto the shared childPool incrementally as it
+// is parsed.
+struct ListSlots {
+    num start;
+    num count;
+}
+
+ListSlots listSlotsCreate() {
+    give new ListSlots(0, 0);
+}
+
+// Accumulates argument ids into a LOCAL vector first, flushing them onto the
+// arena's shared childPool in one contiguous burst only after the whole
+// list is known - the same "accumulate locally, flush once at the end"
+// pattern parseBlock()/parseProgram()/parseStructDeclaration() already use,
+// and for the identical reason: an argument can itself contain a nested
+// call or struct construction (e.g. "add(1, add(2, 3))", "new Box(new
+// Point(1, 2))"), which recurses back into parseArguments() for ITS OWN
+// list before this call's loop reaches its next iteration. Pushing directly
+// onto childPool as each argument is parsed (the earlier, buggy version of
+// this function) let that inner recursive call's pushes land in between
+// this list's own not-yet-pushed later elements, corrupting the (start,
+// count) window this list ends up recording - confirmed by differential
+// testing against Java's Parser on exactly these two shapes. Fills
+// out.start/out.count; gives 0 on success, -1 on failure (out is left
+// untouched on failure - the caller must check the return value first).
+num parseArguments(ParserState p, ListSlots out) {
+    VectorNum argIds = vectorNumCreate();
+    if (!parserCheck(p, tokenKindRightParen())) {
+        flag more = yes;
+        loop (more) {
+            num argId = parseExpression(p);
+            if (argId == -1) {
+                give -1;
+            }
+            vectorNumPush(argIds, argId);
+            more = parserMatch(p, tokenKindComma());
+        }
+    }
+    num start = arenaChildPoolBegin(p.arena);
+    num i = 0;
+    loop (i < argIds.count) {
+        arenaChildPoolPush(p.arena, argIds.items[i]);
+        i = i + 1;
+    }
+    out.start = start;
+    out.count = argIds.count;
+    give 0;
+}
+
+// KW_NEW dispatch: an IDENTIFIER immediately after 'new' means struct
+// construction; any element-type keyword means array creation. The two
+// token sets are disjoint (a keyword can never also lex as IDENTIFIER), so
+// one token of lookahead is always enough - no backtracking.
+num parseNewExpression(ParserState p) {
+    num newTok = parserAdvance(p);
+    if (parserCheck(p, tokenKindIdentifier())) {
+        num nameTok = parserAdvance(p);
+        text structName = p.tokens.lexemes.items[nameTok];
+        if (parserConsume(p, tokenKindLeftParen(), "expected '(' after struct name") == -1) {
+            give -1;
+        }
+        ListSlots args = listSlotsCreate();
+        if (parseArguments(p, args) == -1) {
+            give -1;
+        }
+        num closeTok = parserConsume(p, tokenKindRightParen(), "expected ')' after arguments");
+        if (closeTok == -1) {
+            give -1;
+        }
+        num id = arenaAlloc(p.arena, nodeKindNewStructExpression(), p.tokens.lines.items[newTok],
+                p.tokens.columns.items[newTok], tokenEndLine(p, closeTok), tokenEndCol(p, closeTok));
+        arenaSetText0(p.arena, id, structName);
+        arenaSetList1(p.arena, id, args.start, args.count);
+        give id;
+    }
+
+    TypeSlots elementType = typeSlotsCreate();
+    if (parseElementType(p, elementType) == -1) {
+        give -1;
+    }
+    if (parserConsume(p, tokenKindLeftBracket(), "expected '[' after array element type") == -1) {
+        give -1;
+    }
+    num sizeId = parseExpression(p);
+    if (sizeId == -1) {
+        give -1;
+    }
+    num closeTok = parserConsume(p, tokenKindRightBracket(), "expected ']' after array size");
+    if (closeTok == -1) {
+        give -1;
+    }
+    num id = arenaAlloc(p.arena, nodeKindNewArrayExpression(), p.tokens.lines.items[newTok],
+            p.tokens.columns.items[newTok], tokenEndLine(p, closeTok), tokenEndCol(p, closeTok));
+    arenaSetType(p.arena, id, elementType.elem, 0, "");
+    arenaSetChild1(p.arena, id, sizeId);
+    give id;
+}
+
+num parsePrimary(ParserState p) {
+    if (parserCheck(p, tokenKindKwNew())) {
+        give parseNewExpression(p);
+    }
+    if (parserCheck(p, tokenKindIntLiteral())) {
+        num tok = parserAdvance(p);
+        num id = arenaAlloc(p.arena, nodeKindLiteralExpression(), p.tokens.lines.items[tok],
+                p.tokens.columns.items[tok], tokenEndLine(p, tok), tokenEndCol(p, tok));
+        arenaSetType(p.arena, id, primTypeInt(), 0, "");
+        arenaSetChild1(p.arena, id, p.tokens.literalNumbers.items[tok]);
+        give id;
+    }
+    if (parserCheck(p, tokenKindFloatLiteral())) {
+        num tok = parserAdvance(p);
+        num id = arenaAlloc(p.arena, nodeKindLiteralExpression(), p.tokens.lines.items[tok],
+                p.tokens.columns.items[tok], tokenEndLine(p, tok), tokenEndCol(p, tok));
+        arenaSetType(p.arena, id, primTypeFloat(), 0, "");
+        arenaSetLitDec(p.arena, id, p.tokens.literalDecimals.items[tok]);
+        give id;
+    }
+    if (parserCheck(p, tokenKindBooleanLiteral())) {
+        num tok = parserAdvance(p);
+        num id = arenaAlloc(p.arena, nodeKindLiteralExpression(), p.tokens.lines.items[tok],
+                p.tokens.columns.items[tok], tokenEndLine(p, tok), tokenEndCol(p, tok));
+        arenaSetType(p.arena, id, primTypeBool(), 0, "");
+        arenaSetChild1(p.arena, id, p.tokens.literalBools.items[tok]);
+        give id;
+    }
+    if (parserCheck(p, tokenKindStringLiteral())) {
+        num tok = parserAdvance(p);
+        num id = arenaAlloc(p.arena, nodeKindLiteralExpression(), p.tokens.lines.items[tok],
+                p.tokens.columns.items[tok], tokenEndLine(p, tok), tokenEndCol(p, tok));
+        arenaSetType(p.arena, id, primTypeString(), 0, "");
+        arenaSetText0(p.arena, id, p.tokens.literalTexts.items[tok]);
+        give id;
+    }
+    if (parserCheck(p, tokenKindIdentifier())) {
+        num tok = parserAdvance(p);
+        num id = arenaAlloc(p.arena, nodeKindVariableExpression(), p.tokens.lines.items[tok],
+                p.tokens.columns.items[tok], tokenEndLine(p, tok), tokenEndCol(p, tok));
+        arenaSetText0(p.arena, id, p.tokens.lexemes.items[tok]);
+        give id;
+    }
+    if (parserCheck(p, tokenKindLeftParen())) {
+        num openTok = parserAdvance(p);
+        num innerId = parseExpression(p);
+        if (innerId == -1) {
+            give -1;
+        }
+        num closeTok = parserConsume(p, tokenKindRightParen(), "expected ')' after expression");
+        if (closeTok == -1) {
+            give -1;
+        }
+        num id = arenaAlloc(p.arena, nodeKindGroupingExpression(), p.tokens.lines.items[openTok],
+                p.tokens.columns.items[openTok], tokenEndLine(p, closeTok), tokenEndCol(p, closeTok));
+        arenaSetChild1(p.arena, id, innerId);
+        give id;
+    }
+    give parserError(p, "expected an expression");
+}

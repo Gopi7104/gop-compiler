@@ -1,0 +1,331 @@
+// ast_arena.gopi - Project 2, Phase 2: the self-hosted AST Arena.
+//
+// A line-for-line-in-spirit (not line-for-line, since Java's AST is a sealed
+// hierarchy of immutable records with no arena equivalent) mirror of
+// src/main/java/com/gopilang/ast/*.java's node shapes, translated into
+// GopiLang's data-oriented shape exactly the way lexer.gopi translated
+// Token/TokenType into TokenStream:
+//   - Every node - Program, Parameter, FunctionDeclaration, StructDeclaration,
+//     every Stmt, every Expr - becomes one row spread across this file's
+//     parallel vectors, addressed by a dense num node id (0, 1, 2, ... in
+//     allocation order). There is no per-kind struct; one shared column set
+//     covers every node kind, exactly as TokenStream's eight columns cover
+//     every token kind.
+//   - The Parser (selfhost/parser/parser.gopi) is the ONLY writer. Once
+//     parsing finishes, nothing further ever calls an arenaSet*/arenaAlloc*
+//     function again - the arena is immutable from that point on by
+//     convention (GopiLang has no access-control keyword to enforce this
+//     mechanically, the same reason BRL's vectors rely on convention, not
+//     encapsulation, to keep tokenStreamAppend()/diagnosticBufferAppend()
+//     as their sole writers).
+//   - No generics, so no single "children: num[]" per node - variable-length
+//     child lists (function parameters, block statements, call/construction
+//     arguments, struct fields, and Program's own function/struct lists) are
+//     stored in ONE shared flat pool vector (childPool), with each node
+//     recording (start, count) into that pool - the same "index range into a
+//     shared flat store" idiom HashMapTextToNum uses for its three parallel
+//     probe-sequence vectors, generalized to variable-length lists instead of
+//     fixed-size slots.
+//
+// Column reuse table (which columns a given node kind actually populates -
+// every other column on that row holds its harmless default: -1 for a
+// child/list/type/operator slot, 0 for list counts, "" for text, 0.0 for the
+// dec literal column - never read, never meaningful, present purely to keep
+// every column the same length, exactly as TokenStream's unused literal
+// columns already work):
+//
+//   Program                 : list1 = functions, list2 = structs
+//   Parameter                : type0 (+isArray0/structName0), text0 = name
+//   FunctionDeclaration      : type0 = return type, text0 = name,
+//                              list1 = parameters, child1 = body (Block)
+//   StructDeclaration        : text0 = name, list1 = fields (Parameter ids)
+//   BlockStatement           : list1 = statements
+//   ExpressionStatement      : child1 = expression
+//   VariableDeclaration      : type0 = declared type, text0 = name,
+//                              child1 = initializer (-1 if none)
+//   IfStatement              : child1 = condition, child2 = thenBranch,
+//                              child3 = elseBranch (-1 if none)
+//   WhileStatement           : child1 = condition, child2 = body
+//   ReturnStatement          : child1 = value (-1 if none)
+//   PrintStatement           : child1 = value
+//   LiteralExpression        : type0.elem = which literal kind (see
+//                              primTypeInt/Float/Bool/String below);
+//                              child1 = int/bool value, litDec0 = dec value,
+//                              text0 = string value (only the one matching
+//                              slot is ever populated for a given row)
+//   VariableExpression       : text0 = name
+//   GroupingExpression       : child1 = inner
+//   UnaryExpression          : child1 = operand, operator0 = unary op
+//   BinaryExpression         : child1 = left, child2 = right,
+//                              operator0 = binary op
+//   AssignmentExpression     : text0 = target name, child1 = value
+//   FunctionCallExpression   : text0 = calleeName, list1 = arguments
+//   NewArrayExpression       : type0.elem = element type, child1 = size
+//   ArrayAccessExpression    : child1 = array, child2 = index
+//   ArrayLengthExpression    : child1 = array
+//   IndexAssignmentExpression: child1 = array, child2 = index, child3 = value
+//   NewStructExpression      : text0 = structName, list1 = arguments
+//   FieldAccessExpression    : child1 = target, text0 = fieldName
+//   FieldAssignmentExpression: child1 = target, child2 = value,
+//                              text0 = fieldName
+//
+// This is a closed, deliberately fixed column set - every node kind above
+// already fits within three plain child slots, one list slot (plus
+// Program's second list slot), one text slot, one type slot, one dec-literal
+// slot, and one operator slot; nothing here anticipates a node kind beyond
+// the frozen Java AST's own 4 declaration/program shapes + 7 Stmt + 14 Expr.
+
+// ---------------------------------------------------------------------
+// Node kinds - plain zero-argument functions standing in for an enum,
+// exactly like lexer.gopi's tokenKindXxx() functions. Numbered in an order
+// chosen for this file alone (there is no Java "AST node kind" ordinal to
+// cross-reference against, unlike TokenType) - declarations first, then
+// statements, then expressions, matching ARCHITECTURE.md's own Stmt/Expr
+// grouping.
+// ---------------------------------------------------------------------
+
+num nodeKindProgram() { give 0; }
+num nodeKindParameter() { give 1; }
+num nodeKindFunctionDeclaration() { give 2; }
+num nodeKindStructDeclaration() { give 3; }
+
+num nodeKindBlockStatement() { give 4; }
+num nodeKindExpressionStatement() { give 5; }
+num nodeKindVariableDeclaration() { give 6; }
+num nodeKindIfStatement() { give 7; }
+num nodeKindWhileStatement() { give 8; }
+num nodeKindReturnStatement() { give 9; }
+num nodeKindPrintStatement() { give 10; }
+
+num nodeKindLiteralExpression() { give 11; }
+num nodeKindVariableExpression() { give 12; }
+num nodeKindGroupingExpression() { give 13; }
+num nodeKindUnaryExpression() { give 14; }
+num nodeKindBinaryExpression() { give 15; }
+num nodeKindAssignmentExpression() { give 16; }
+num nodeKindFunctionCallExpression() { give 17; }
+num nodeKindNewArrayExpression() { give 18; }
+num nodeKindArrayAccessExpression() { give 19; }
+num nodeKindArrayLengthExpression() { give 20; }
+num nodeKindIndexAssignmentExpression() { give 21; }
+num nodeKindNewStructExpression() { give 22; }
+num nodeKindFieldAccessExpression() { give 23; }
+num nodeKindFieldAssignmentExpression() { give 24; }
+
+// ---------------------------------------------------------------------
+// UnaryOperator / BinaryOperator - mirrors ast.UnaryOperator/BinaryOperator's
+// own declared order exactly (ADD, SUBTRACT, MULTIPLY, DIVIDE, MODULO,
+// EQUAL, NOT_EQUAL, LESS, GREATER, LESS_EQUAL, GREATER_EQUAL, AND, OR).
+// ---------------------------------------------------------------------
+
+num unaryOpNegate() { give 0; }
+num unaryOpNot() { give 1; }
+
+num binaryOpAdd() { give 0; }
+num binaryOpSubtract() { give 1; }
+num binaryOpMultiply() { give 2; }
+num binaryOpDivide() { give 3; }
+num binaryOpModulo() { give 4; }
+num binaryOpEqual() { give 5; }
+num binaryOpNotEqual() { give 6; }
+num binaryOpLess() { give 7; }
+num binaryOpGreater() { give 8; }
+num binaryOpLessEqual() { give 9; }
+num binaryOpGreaterEqual() { give 10; }
+num binaryOpAnd() { give 11; }
+num binaryOpOr() { give 12; }
+
+// ---------------------------------------------------------------------
+// PrimitiveType - mirrors types.PrimitiveType's INT/FLOAT/BOOL/STRING/VOID.
+// Also reused, unmodified, as LiteralExpression's own "which literal kind"
+// tag (type0.elem) - a literal's type IS always exactly one of these four
+// (never VOID), so no separate tag set is needed.
+// ---------------------------------------------------------------------
+
+num primTypeInt() { give 0; }
+num primTypeFloat() { give 1; }
+num primTypeBool() { give 2; }
+num primTypeString() { give 3; }
+num primTypeVoid() { give 4; }
+
+// ---------------------------------------------------------------------
+// AstArena - structure-of-arrays, one row per node across every column,
+// plus one shared flat pool for every variable-length child list.
+// ---------------------------------------------------------------------
+
+struct AstArena {
+    VectorNum kinds;
+    VectorNum startLines;
+    VectorNum startCols;
+    VectorNum endLines;
+    VectorNum endCols;
+    VectorNum child1;
+    VectorNum child2;
+    VectorNum child3;
+    VectorNum listStart;
+    VectorNum listCount;
+    VectorNum list2Start;
+    VectorNum list2Count;
+    VectorText text0;
+    VectorNum typeElem;
+    VectorNum typeIsArray;
+    VectorText typeStructName;
+    VectorDec litDec;
+    VectorNum operator;
+    VectorNum childPool;
+}
+
+AstArena arenaCreate() {
+    give new AstArena(
+            vectorNumCreate(), vectorNumCreate(), vectorNumCreate(), vectorNumCreate(), vectorNumCreate(),
+            vectorNumCreate(), vectorNumCreate(), vectorNumCreate(),
+            vectorNumCreate(), vectorNumCreate(), vectorNumCreate(), vectorNumCreate(),
+            vectorTextCreate(),
+            vectorNumCreate(), vectorNumCreate(), vectorTextCreate(),
+            vectorDecCreate(),
+            vectorNumCreate(),
+            vectorNumCreate());
+}
+
+num arenaNodeCount(AstArena a) {
+    give a.kinds.count;
+}
+
+// ---------------------------------------------------------------------
+// Node allocation - the only function that grows the per-node columns
+// (childPool grows separately, via arenaChildPoolPush below). Every column
+// gets its harmless default; callers fill in only the columns their node
+// kind actually uses, via the setters that follow.
+// ---------------------------------------------------------------------
+
+num arenaAlloc(AstArena a, num kind, num startLine, num startCol, num endLine, num endCol) {
+    vectorNumPush(a.kinds, kind);
+    vectorNumPush(a.startLines, startLine);
+    vectorNumPush(a.startCols, startCol);
+    vectorNumPush(a.endLines, endLine);
+    vectorNumPush(a.endCols, endCol);
+    vectorNumPush(a.child1, -1);
+    vectorNumPush(a.child2, -1);
+    vectorNumPush(a.child3, -1);
+    vectorNumPush(a.listStart, 0);
+    vectorNumPush(a.listCount, 0);
+    vectorNumPush(a.list2Start, 0);
+    vectorNumPush(a.list2Count, 0);
+    vectorTextPush(a.text0, "");
+    vectorNumPush(a.typeElem, -1);
+    vectorNumPush(a.typeIsArray, 0);
+    vectorTextPush(a.typeStructName, "");
+    vectorDecPush(a.litDec, 0.0);
+    vectorNumPush(a.operator, -1);
+    give a.kinds.count - 1;
+}
+
+// ---------------------------------------------------------------------
+// Setters - the Parser calls exactly the ones relevant to the node kind it
+// just allocated (see the column-reuse table at the top of this file).
+// ---------------------------------------------------------------------
+
+none arenaSetChild1(AstArena a, num id, num value) { a.child1.items[id] = value; }
+none arenaSetChild2(AstArena a, num id, num value) { a.child2.items[id] = value; }
+none arenaSetChild3(AstArena a, num id, num value) { a.child3.items[id] = value; }
+
+none arenaSetList1(AstArena a, num id, num start, num count) {
+    a.listStart.items[id] = start;
+    a.listCount.items[id] = count;
+}
+
+none arenaSetList2(AstArena a, num id, num start, num count) {
+    a.list2Start.items[id] = start;
+    a.list2Count.items[id] = count;
+}
+
+none arenaSetText0(AstArena a, num id, text value) { a.text0.items[id] = value; }
+
+none arenaSetType(AstArena a, num id, num elem, num isArray, text structName) {
+    a.typeElem.items[id] = elem;
+    a.typeIsArray.items[id] = isArray;
+    a.typeStructName.items[id] = structName;
+}
+
+none arenaSetLitDec(AstArena a, num id, dec value) { a.litDec.items[id] = value; }
+
+none arenaSetOperator(AstArena a, num id, num value) { a.operator.items[id] = value; }
+
+none arenaSetRangeEnd(AstArena a, num id, num endLine, num endCol) {
+    a.endLines.items[id] = endLine;
+    a.endCols.items[id] = endCol;
+}
+
+// ---------------------------------------------------------------------
+// Getters / node lookup - plain column reads by node id. Direct field
+// access (a.child1.items[id]) works exactly as well and is used freely
+// throughout the Parser too - these exist only where a named call reads
+// more clearly than a bare field chain (mirrors BRL's own mix of direct
+// field access and small named helpers, e.g. diagnosticBufferSize()).
+// ---------------------------------------------------------------------
+
+num arenaKind(AstArena a, num id) { give a.kinds.items[id]; }
+num arenaStartLine(AstArena a, num id) { give a.startLines.items[id]; }
+num arenaStartCol(AstArena a, num id) { give a.startCols.items[id]; }
+num arenaEndLine(AstArena a, num id) { give a.endLines.items[id]; }
+num arenaEndCol(AstArena a, num id) { give a.endCols.items[id]; }
+num arenaChild1(AstArena a, num id) { give a.child1.items[id]; }
+num arenaChild2(AstArena a, num id) { give a.child2.items[id]; }
+num arenaChild3(AstArena a, num id) { give a.child3.items[id]; }
+num arenaListStart(AstArena a, num id) { give a.listStart.items[id]; }
+num arenaListCount(AstArena a, num id) { give a.listCount.items[id]; }
+num arenaList2Start(AstArena a, num id) { give a.list2Start.items[id]; }
+num arenaList2Count(AstArena a, num id) { give a.list2Count.items[id]; }
+text arenaText0(AstArena a, num id) { give a.text0.items[id]; }
+num arenaTypeElem(AstArena a, num id) { give a.typeElem.items[id]; }
+num arenaTypeIsArray(AstArena a, num id) { give a.typeIsArray.items[id]; }
+text arenaTypeStructName(AstArena a, num id) { give a.typeStructName.items[id]; }
+dec arenaLitDec(AstArena a, num id) { give a.litDec.items[id]; }
+num arenaOperator(AstArena a, num id) { give a.operator.items[id]; }
+
+// One entry of a node's child list, resolved through (listStart+offset) or
+// (list2Start+offset) into the shared pool. offset is 0-based, must be
+// < the corresponding listCount/list2Count.
+num arenaListAt(AstArena a, num id, num offset) {
+    give a.childPool.items[a.listStart.items[id] + offset];
+}
+
+num arenaList2At(AstArena a, num id, num offset) {
+    give a.childPool.items[a.list2Start.items[id] + offset];
+}
+
+// ---------------------------------------------------------------------
+// Child-list construction. A list is built by pushing every member's node
+// id onto the shared childPool, then recording the resulting contiguous
+// (start, count) range on the owning node via arenaSetList1/arenaSetList2.
+//
+// This is safe ONLY as a single contiguous burst with nothing else pushing
+// onto childPool in between - NOT by calling arenaChildPoolPush() once per
+// member as each is parsed. A member can itself contain a nested construct
+// that builds its own list before this list's own loop reaches its next
+// element (a block statement containing another block; a call argument that
+// is itself a call, e.g. "add(1, add(2, 3))"; a struct-construction argument
+// that is itself a struct construction, e.g. "new Box(new Point(1, 2))") -
+// that inner list's own pushes would land in between this list's not-yet-
+// pushed later members, corrupting the (start, count) window this list
+// records. Confirmed by differential testing against Java's Parser on
+// exactly these shapes.
+//
+// Every list-building call site in parser.gopi therefore accumulates member
+// ids into its OWN local VectorNum first (parseProgram's functionIds/
+// structIds, parseBlock's stmtIds, parseStructDeclaration's fieldIds,
+// parseArguments' argIds, parseFunction's inline loop pushing straight into
+// the pool - safe there specifically because parameters can never contain a
+// nested list of their own), and flushes that local vector into childPool in
+// one tight loop only once the full list is known - immediately before
+// calling arenaSetList1/arenaSetList2, with no parsing call in between the
+// flush and the set.
+// ---------------------------------------------------------------------
+
+num arenaChildPoolBegin(AstArena a) {
+    give a.childPool.count;
+}
+
+none arenaChildPoolPush(AstArena a, num nodeId) {
+    vectorNumPush(a.childPool, nodeId);
+}
