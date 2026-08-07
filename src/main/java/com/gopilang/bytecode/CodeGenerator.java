@@ -65,6 +65,19 @@ public final class CodeGenerator {
     private final Map<FunctionSymbol, Integer> functionIndices = new HashMap<>();
     private final Map<StructSymbol, Integer> structIndices = new HashMap<>();
 
+    // Milestone B1: the one place a builtin's name maps to its dedicated
+    // opcode. Builtins are ordinary FunctionSymbols in functionTable (see
+    // SemanticAnalyzer.registerBuiltins()) — this map is consulted only here,
+    // to decide CALL vs. a dedicated opcode; every other check (argument
+    // count/type, return type) already ran generically, unchanged.
+    private static final Map<String, Opcode> BUILTIN_OPCODES = Map.of(
+            "charCodeAt", Opcode.CHAR_CODE_AT,
+            "textLength", Opcode.TEXT_LENGTH,
+            "textFromCharCode", Opcode.TEXT_FROM_CHAR_CODE,
+            "readFile", Opcode.READ_FILE,
+            "argCount", Opcode.ARG_COUNT,
+            "argAt", Opcode.ARG_AT);
+
     public CodeGenerator(Program program, SemanticModel semanticModel) {
         this.program = program;
         this.semanticModel = semanticModel;
@@ -230,11 +243,16 @@ public final class CodeGenerator {
                 if (symbol == null) {
                     throw new IllegalStateException("Unresolved FunctionCallExpression: " + call.calleeName());
                 }
-                Integer functionIndex = functionIndices.get(symbol);
-                if (functionIndex == null) {
-                    throw new IllegalStateException("No function index for: " + symbol.name());
+                Opcode builtinOpcode = BUILTIN_OPCODES.get(symbol.name());
+                if (builtinOpcode != null) {
+                    instructions.add(new Instruction(builtinOpcode, 0));
+                } else {
+                    Integer functionIndex = functionIndices.get(symbol);
+                    if (functionIndex == null) {
+                        throw new IllegalStateException("No function index for: " + symbol.name());
+                    }
+                    instructions.add(new Instruction(Opcode.CALL, functionIndex));
                 }
-                instructions.add(new Instruction(Opcode.CALL, functionIndex));
             }
             case NewArrayExpression newArray -> {
                 compileExpr(newArray.size());

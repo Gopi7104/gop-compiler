@@ -421,4 +421,107 @@ class CodeGeneratorTest {
                     opcodesOf(instructions));
         }
     }
+
+    // Milestone B1 (self-hosting bootstrap): a builtin call compiles to
+    // argument evaluation (identical to an ordinary FunctionCallExpression)
+    // followed by its dedicated opcode instead of CALL — see
+    // CodeGenerator.BUILTIN_OPCODES.
+    @Nested
+    class Builtins {
+
+        @Test
+        void charCodeAtCompilesArgumentsThenItsOwnOpcode() {
+            BytecodeModule module = compile("none main() { num c = charCodeAt(\"abc\", 0); }");
+            List<Instruction> instructions = functionInstructions(module, "main");
+
+            assertEquals(
+                    List.of(Opcode.PUSH_CONST, Opcode.PUSH_CONST, Opcode.CHAR_CODE_AT, Opcode.STORE, Opcode.RETURN),
+                    opcodesOf(instructions));
+        }
+
+        @Test
+        void textLengthCompilesToItsOwnOpcode() {
+            BytecodeModule module = compile("none main() { num n = textLength(\"abc\"); }");
+            List<Instruction> instructions = functionInstructions(module, "main");
+
+            assertEquals(
+                    List.of(Opcode.PUSH_CONST, Opcode.TEXT_LENGTH, Opcode.STORE, Opcode.RETURN),
+                    opcodesOf(instructions));
+        }
+
+        @Test
+        void textFromCharCodeCompilesToItsOwnOpcode() {
+            BytecodeModule module = compile("none main() { text t = textFromCharCode(65); }");
+            List<Instruction> instructions = functionInstructions(module, "main");
+
+            assertEquals(
+                    List.of(Opcode.PUSH_CONST, Opcode.TEXT_FROM_CHAR_CODE, Opcode.STORE, Opcode.RETURN),
+                    opcodesOf(instructions));
+        }
+
+        @Test
+        void readFileCompilesToItsOwnOpcode() {
+            BytecodeModule module = compile("none main() { text t = readFile(\"x.gopi\"); }");
+            List<Instruction> instructions = functionInstructions(module, "main");
+
+            assertEquals(
+                    List.of(Opcode.PUSH_CONST, Opcode.READ_FILE, Opcode.STORE, Opcode.RETURN),
+                    opcodesOf(instructions));
+        }
+
+        @Test
+        void argCountCompilesWithNoArgumentsPushed() {
+            BytecodeModule module = compile("none main() { num n = argCount(); }");
+            List<Instruction> instructions = functionInstructions(module, "main");
+
+            assertEquals(List.of(Opcode.ARG_COUNT, Opcode.STORE, Opcode.RETURN), opcodesOf(instructions));
+        }
+
+        @Test
+        void argAtCompilesArgumentThenItsOwnOpcode() {
+            BytecodeModule module = compile("none main() { text t = argAt(0); }");
+            List<Instruction> instructions = functionInstructions(module, "main");
+
+            assertEquals(
+                    List.of(Opcode.PUSH_CONST, Opcode.ARG_AT, Opcode.STORE, Opcode.RETURN),
+                    opcodesOf(instructions));
+        }
+
+        @Test
+        void noBuiltinOpcodeCarriesAFunctionIndexOperand() {
+            // Builtins are never real functions, so their opcode's operand is
+            // always 0 (arguments arrive entirely via the stack, exactly like
+            // CALL's own convention) — never mistaken for a CALL-style index.
+            BytecodeModule module = compile("none main() { num c = charCodeAt(\"abc\", 0); }");
+            List<Instruction> instructions = functionInstructions(module, "main");
+            Instruction charCodeAt = instructions.stream()
+                    .filter(i -> i.opcode() == Opcode.CHAR_CODE_AT).findFirst().orElseThrow();
+            assertEquals(0, charCodeAt.operand());
+        }
+
+        @Test
+        void argumentsToABuiltinEvaluateLeftToRight() {
+            BytecodeModule module = compile(
+                    "num a() { show(\"A\"); give 1; } "
+                            + "none main() { num c = charCodeAt(\"abc\", a()); }");
+            List<Instruction> instructions = functionInstructions(module, "main");
+
+            // "abc" pushed first, then a()'s CALL, then CHAR_CODE_AT consumes both.
+            assertEquals(
+                    List.of(Opcode.PUSH_CONST, Opcode.CALL, Opcode.CHAR_CODE_AT, Opcode.STORE, Opcode.RETURN),
+                    opcodesOf(instructions));
+        }
+
+        @Test
+        void plainFunctionCallsStillCompileToCall() {
+            // Regression: an ordinary user function is completely unaffected
+            // by the builtin dispatch table.
+            BytecodeModule module = compile("num add(num a, num b) { give a + b; } none main() { show(add(1, 2)); }");
+            List<Instruction> instructions = functionInstructions(module, "main");
+
+            assertEquals(
+                    List.of(Opcode.PUSH_CONST, Opcode.PUSH_CONST, Opcode.CALL, Opcode.PRINT, Opcode.RETURN),
+                    opcodesOf(instructions));
+        }
+    }
 }

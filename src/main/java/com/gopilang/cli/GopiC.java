@@ -32,8 +32,12 @@ public final class GopiC {
 
     /** Dispatches to the requested mode based on {@code args}, or prints usage if none match. */
     public static void main(String[] args) throws IOException {
-        if (args.length == 1 && !args[0].startsWith("--")) {
-            run(Path.of(args[0]));
+        if (args.length >= 1 && !args[0].startsWith("--")) {
+            // Milestone B1: everything after the source file is the compiled
+            // program's OWN argv, surfaced to it via argCount()/argAt() — not
+            // consumed by gopic itself, so the inspection modes below still
+            // require exactly one file argument and no more.
+            run(Path.of(args[0]), List.of(args).subList(1, args.length));
         } else if (args.length == 2 && args[0].equals("--tokens")) {
             printTokens(Path.of(args[1]));
         } else if (args.length == 2 && args[0].equals("--ast")) {
@@ -45,9 +49,9 @@ public final class GopiC {
         }
     }
 
-    private static void run(Path sourceFile) throws IOException {
+    private static void run(Path sourceFile, List<String> programArgs) throws IOException {
         BytecodeModule module = compileToBytecode(sourceFile);
-        new VirtualMachine(module).run();
+        new VirtualMachine(module, programArgs).run();
     }
 
     private static void disassemble(Path sourceFile) throws IOException {

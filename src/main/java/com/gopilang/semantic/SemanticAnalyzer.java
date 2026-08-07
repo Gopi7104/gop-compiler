@@ -32,6 +32,7 @@ import com.gopilang.errors.DiagnosticReporter;
 import com.gopilang.errors.ErrorPhase;
 import com.gopilang.types.PrimitiveType;
 import com.gopilang.types.TypeRef;
+import com.gopilang.util.SourceLocation;
 import com.gopilang.util.SourceRange;
 
 import java.util.ArrayList;
@@ -100,6 +101,7 @@ public final class SemanticAnalyzer {
 
     /** Runs both passes over the program and returns the resulting {@link SemanticModel}. */
     public SemanticModel analyze() {
+        registerBuiltins();
         registerStructs();
         registerFunctions();
         for (FunctionDeclaration function : program.functions()) {
@@ -134,6 +136,38 @@ public final class SemanticAnalyzer {
                     "found return type '" + main.returnType().displayName() + "' with "
                             + main.parameterTypes().size() + " parameter(s)"));
         }
+    }
+
+    // Milestone B1 (self-hosting bootstrap): six VM-intrinsic functions,
+    // pre-registered into functionTable before any user function is — which
+    // is what makes a user's own top-level declaration of the same name
+    // collide via registerFunctions()'s existing functionTable.putIfAbsent()
+    // duplicate-detection, with the existing "function 'X' is already
+    // declared" diagnostic, unchanged. Deliberately not a separate
+    // "intrinsic table": these become ordinary FunctionSymbols, so every
+    // downstream check (analyzeExpr's callResolutions, typeOf's argument-count
+    // and argument-type checking, CodeGenerator's return type reads) works on
+    // them with zero special-casing — only CodeGenerator needs to know these
+    // particular names are builtins, to emit their dedicated opcode instead
+    // of CALL.
+    private static final SourceRange BUILTIN_DECLARED_AT = SourceRange.point(new SourceLocation(0, 0));
+
+    private void registerBuiltins() {
+        registerBuiltin("charCodeAt", new TypeRef(PrimitiveType.INT, false),
+                new TypeRef(PrimitiveType.STRING, false), new TypeRef(PrimitiveType.INT, false));
+        registerBuiltin("textLength", new TypeRef(PrimitiveType.INT, false),
+                new TypeRef(PrimitiveType.STRING, false));
+        registerBuiltin("textFromCharCode", new TypeRef(PrimitiveType.STRING, false),
+                new TypeRef(PrimitiveType.INT, false));
+        registerBuiltin("readFile", new TypeRef(PrimitiveType.STRING, false),
+                new TypeRef(PrimitiveType.STRING, false));
+        registerBuiltin("argCount", new TypeRef(PrimitiveType.INT, false));
+        registerBuiltin("argAt", new TypeRef(PrimitiveType.STRING, false),
+                new TypeRef(PrimitiveType.INT, false));
+    }
+
+    private void registerBuiltin(String name, TypeRef returnType, TypeRef... parameterTypes) {
+        functionTable.put(name, new FunctionSymbol(name, returnType, List.of(parameterTypes), BUILTIN_DECLARED_AT));
     }
 
     // Pass 1, structs: register every struct's field list before functions are

@@ -11,6 +11,15 @@ package com.gopilang.bytecode;
  * also a plain {@code Object[]} (one slot per field, declaration order) —
  * {@code NEW_STRUCT} is the only struct-specific opcode; there is no
  * dedicated runtime struct type, matching arrays exactly.
+ *
+ * <p>Milestone B1 (self-hosting bootstrap) added six zero-operand builtin
+ * opcodes ({@code CHAR_CODE_AT}/{@code TEXT_LENGTH}/{@code
+ * TEXT_FROM_CHAR_CODE}/{@code READ_FILE}/{@code ARG_COUNT}/{@code ARG_AT}) —
+ * the minimum runtime primitives a GopiLang-written compiler needs to
+ * inspect {@code text} values character-by-character and reach the
+ * filesystem/argv, neither of which any existing opcode combination can do.
+ * They use the same "arguments arrive via the operand stack" calling
+ * convention {@code CALL} already established, not a new instruction shape.
  */
 public enum Opcode {
 
@@ -55,6 +64,15 @@ public enum Opcode {
 
     // Structs
     NEW_STRUCT,
+
+    // Builtins (VM intrinsics) — zero-operand, arguments via the operand
+    // stack, same calling convention as CALL
+    CHAR_CODE_AT,
+    TEXT_LENGTH,
+    TEXT_FROM_CHAR_CODE,
+    READ_FILE,
+    ARG_COUNT,
+    ARG_AT,
 
     // I/O
     PRINT,

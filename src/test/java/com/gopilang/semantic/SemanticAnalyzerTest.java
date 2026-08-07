@@ -1083,4 +1083,82 @@ class SemanticAnalyzerTest {
             assertNoDiagnostics("struct Point { num x; } none main() { Point p = new Point(1); }");
         }
     }
+
+    // Milestone B1 (self-hosting bootstrap): six builtins pre-registered into
+    // functionTable before any user function — see
+    // SemanticAnalyzer.registerBuiltins(). Every check below is the SAME
+    // FunctionCallExpression checking machinery ArgumentCount/ArgumentType
+    // above already exercise; nothing new was added to typeOf/analyzeExpr for
+    // this milestone, which is exactly what these tests are confirming.
+    @Nested
+    class Builtins {
+
+        @Test
+        void charCodeAtWithCorrectArgumentsIsFine() {
+            assertNoDiagnostics("none main() { num c = charCodeAt(\"abc\", 0); show(c); }");
+        }
+
+        @Test
+        void textLengthWithCorrectArgumentsIsFine() {
+            assertNoDiagnostics("none main() { num n = textLength(\"abc\"); show(n); }");
+        }
+
+        @Test
+        void textFromCharCodeWithCorrectArgumentsIsFine() {
+            assertNoDiagnostics("none main() { text t = textFromCharCode(65); show(t); }");
+        }
+
+        @Test
+        void readFileWithCorrectArgumentsIsFine() {
+            assertNoDiagnostics("none main() { text t = readFile(\"x.gopi\"); show(t); }");
+        }
+
+        @Test
+        void argCountWithNoArgumentsIsFine() {
+            assertNoDiagnostics("none main() { num n = argCount(); show(n); }");
+        }
+
+        @Test
+        void argAtWithCorrectArgumentsIsFine() {
+            assertNoDiagnostics("none main() { text t = argAt(0); show(t); }");
+        }
+
+        @Test
+        void wrongArgumentCountIsReported() {
+            Diagnostic d = assertSingleDiagnostic("none main() { charCodeAt(\"abc\"); }", ErrorPhase.TYPE);
+            assertTrue(d.message().contains("expects 2 argument(s), found 1"));
+        }
+
+        @Test
+        void tooManyArgumentsIsReported() {
+            Diagnostic d = assertSingleDiagnostic("none main() { argCount(1); }", ErrorPhase.TYPE);
+            assertTrue(d.message().contains("expects 0 argument(s), found 1"));
+        }
+
+        @Test
+        void wrongArgumentTypeIsReported() {
+            Diagnostic d = assertSingleDiagnostic("none main() { charCodeAt(5, 0); }", ErrorPhase.TYPE);
+            assertTrue(d.message().contains("expected 'text', found 'num'"));
+        }
+
+        @Test
+        void wrongReturnUsageIsReported() {
+            Diagnostic d = assertSingleDiagnostic(
+                    "none main() { flag f = textLength(\"abc\"); }", ErrorPhase.TYPE);
+            assertTrue(d.message().contains("cannot assign 'num' to variable of type 'flag'"));
+        }
+
+        @Test
+        void redeclaringABuiltinNameIsRejectedAsADuplicate() {
+            Diagnostic d = assertSingleDiagnostic(
+                    "num charCodeAt(num a, num b) { give a + b; } none main() { }", ErrorPhase.SEMANTIC);
+            assertTrue(d.message().contains("function 'charCodeAt' is already declared"));
+        }
+
+        @Test
+        void builtinResultUsableExactlyLikeAnOrdinaryFunctionsResult() {
+            assertNoDiagnostics(
+                    "none main() { num c = charCodeAt(\"abc\", 0); if (c == 97) { show(\"a\"); } }");
+        }
+    }
 }

@@ -12,9 +12,13 @@ import org.junit.jupiter.api.Test;
 
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 // First test suite for the `vm` package (none existed before this milestone
 // — see CONTRIBUTING.md). Built to verify &&/||'s short-circuit codegen
@@ -29,23 +33,33 @@ class VirtualMachineTest {
     // Full pipeline: source -> lexer -> parser -> semantic analysis ->
     // codegen -> VM, capturing stdout exactly as `gopic <file>` would print it.
     private static String run(String source) {
+        return run(source, List.of());
+    }
+
+    // Milestone B1: programArgs backs argCount()/argAt() — everything after
+    // the .gopi file path on the gopic command line, per GopiC.main().
+    private static String run(String source, List<String> programArgs) {
+        BytecodeModule module = compile(source);
+
+        PrintStream originalOut = System.out;
+        ByteArrayOutputStream captured = new ByteArrayOutputStream();
+        try {
+            System.setOut(new PrintStream(captured));
+            new VirtualMachine(module, programArgs).run();
+        } finally {
+            System.setOut(originalOut);
+        }
+        return captured.toString();
+    }
+
+    private static BytecodeModule compile(String source) {
         Parser parser = new Parser(new Lexer(source).scanTokens());
         Program program = parser.parseProgram();
         assertFalse(parser.reporter().hasErrors(), "expected no parser errors for: " + source);
         SemanticAnalyzer analyzer = new SemanticAnalyzer(program);
         SemanticModel model = analyzer.analyze();
         assertFalse(analyzer.reporter().hasErrors(), "expected no semantic errors for: " + source);
-        BytecodeModule module = new CodeGenerator(program, model).generate();
-
-        PrintStream originalOut = System.out;
-        ByteArrayOutputStream captured = new ByteArrayOutputStream();
-        try {
-            System.setOut(new PrintStream(captured));
-            new VirtualMachine(module).run();
-        } finally {
-            System.setOut(originalOut);
-        }
-        return captured.toString();
+        return new CodeGenerator(program, model).generate();
     }
 
     @Nested
@@ -487,6 +501,113 @@ class VirtualMachineTest {
                     num add(num a, num b) { give a + b; }
                     none main() { show(add(1, 2)); }
                     """));
+        }
+    }
+
+    // Milestone B1 (self-hosting bootstrap): the six VM-intrinsic opcodes,
+    // end-to-end. Opcode.java/CodeGenerator changes are covered structurally
+    // by CodeGeneratorTest.Builtins; these tests confirm actual runtime
+    // values, especially CHAR_CODE_AT's -1 out-of-bounds sentinel and
+    // READ_FILE/ARG_AT's "let the underlying Java exception propagate
+    // uncaught" behavior.
+    @Nested
+    class Builtins {
+
+        @Test
+        void charCodeAtValidIndexReturnsTheCharacterCode() {
+            assertEquals("97\n98\n99\n", run("""
+                    none main() {
+                        show(charCodeAt("abc", 0));
+                        show(charCodeAt("abc", 1));
+                        show(charCodeAt("abc", 2));
+                    }
+                    """));
+        }
+
+        @Test
+        void charCodeAtInvalidIndexReturnsNegativeOne() {
+            assertEquals("-1\n-1\n", run("""
+                    none main() {
+                        show(charCodeAt("abc", -1));
+                        show(charCodeAt("abc", 3));
+                    }
+                    """));
+        }
+
+        @Test
+        void textLengthReturnsTheCharacterCount() {
+            assertEquals("0\n3\n", run("""
+                    none main() {
+                        show(textLength(""));
+                        show(textLength("abc"));
+                    }
+                    """));
+        }
+
+        @Test
+        void textFromCharCodeBuildsAOneCharacterText() {
+            assertEquals("A\nz\n", run("""
+                    none main() {
+                        show(textFromCharCode(65));
+                        show(textFromCharCode(122));
+                    }
+                    """));
+        }
+
+        @Test
+        void charCodeAtAndTextFromCharCodeRoundTrip() {
+            assertEquals("a\n", run("""
+                    none main() {
+                        num code = charCodeAt("abc", 0);
+                        show(textFromCharCode(code));
+                    }
+                    """));
+        }
+
+        @Test
+        void argCountReflectsTheProgramArguments() {
+            assertEquals("3\n", run("none main() { show(argCount()); }", List.of("one", "two", "three")));
+        }
+
+        @Test
+        void argAtReturnsEachArgumentInOrder() {
+            assertEquals("one\ntwo\nthree\n", run("""
+                    none main() {
+                        show(argAt(0));
+                        show(argAt(1));
+                        show(argAt(2));
+                    }
+                    """, List.of("one", "two", "three")));
+        }
+
+        @Test
+        void argCountIsZeroWithNoProgramArguments() {
+            assertEquals("0\n", run("none main() { show(argCount()); }"));
+        }
+
+        @Test
+        void readFileSuccessReturnsTheFileContents() throws Exception {
+            Path file = Files.createTempFile("gopilang-vm-test", ".txt");
+            try {
+                Files.writeString(file, "hello from disk");
+                String escapedPath = file.toString().replace("\\", "\\\\");
+                assertEquals("hello from disk\n", run(
+                        "none main() { show(readFile(\"" + escapedPath + "\")); }"));
+            } finally {
+                Files.deleteIfExists(file);
+            }
+        }
+
+        @Test
+        void readFileMissingFileThrows() {
+            BytecodeModule module = compile("none main() { show(readFile(\"/no/such/file-gopilang-test.gopi\")); }");
+            assertThrows(RuntimeException.class, () -> new VirtualMachine(module).run());
+        }
+
+        @Test
+        void argAtOutOfRangeThrows() {
+            BytecodeModule module = compile("none main() { show(argAt(0)); }");
+            assertThrows(IndexOutOfBoundsException.class, () -> new VirtualMachine(module, List.of()).run());
         }
     }
 }

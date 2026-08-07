@@ -6,8 +6,12 @@ import com.gopilang.bytecode.BytecodeStruct;
 import com.gopilang.bytecode.Instruction;
 import com.gopilang.bytecode.Opcode;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayDeque;
 import java.util.Deque;
+import java.util.List;
 
 /**
  * Stack-machine interpreter for a compiled {@link BytecodeModule}. A plain
@@ -22,11 +26,22 @@ import java.util.Deque;
 public final class VirtualMachine {
 
     private final BytecodeModule module;
+    private final List<String> programArgs;
     private final Deque<Frame> callStack = new ArrayDeque<>();
     private int pc;
 
     public VirtualMachine(BytecodeModule module) {
+        this(module, List.of());
+    }
+
+    /**
+     * Milestone B1: {@code programArgs} backs {@code ARG_COUNT}/{@code
+     * ARG_AT} — the program's own command-line arguments, i.e. everything
+     * after the {@code .gopi} file path on the {@code gopic} command line.
+     */
+    public VirtualMachine(BytecodeModule module, List<String> programArgs) {
         this.module = module;
+        this.programArgs = programArgs;
         this.pc = 0;
     }
 
@@ -149,6 +164,39 @@ public final class VirtualMachine {
                         fields[i] = frame.operandStack().pop();
                     }
                     frame.operandStack().push(fields);
+                }
+                case CHAR_CODE_AT -> {
+                    int index = (Integer) frame.operandStack().pop();
+                    String text = (String) frame.operandStack().pop();
+                    frame.operandStack().push(index >= 0 && index < text.length() ? (int) text.charAt(index) : -1);
+                }
+                case TEXT_LENGTH -> {
+                    String text = (String) frame.operandStack().pop();
+                    frame.operandStack().push(text.length());
+                }
+                case TEXT_FROM_CHAR_CODE -> {
+                    int code = (Integer) frame.operandStack().pop();
+                    frame.operandStack().push(String.valueOf((char) code));
+                }
+                case READ_FILE -> {
+                    String path = (String) frame.operandStack().pop();
+                    // Uncaught, like ARRAY_GET's ArrayIndexOutOfBoundsException on a
+                    // bad index — the VM trusts the caller and treats a missing/
+                    // unreadable file as an unchecked runtime failure, not a new
+                    // language-level error mechanism.
+                    try {
+                        frame.operandStack().push(Files.readString(Path.of(path)));
+                    } catch (IOException e) {
+                        throw new RuntimeException("failed to read file: " + path, e);
+                    }
+                }
+                case ARG_COUNT -> frame.operandStack().push(programArgs.size());
+                case ARG_AT -> {
+                    int index = (Integer) frame.operandStack().pop();
+                    // programArgs.get(int) throws IndexOutOfBoundsException on an
+                    // out-of-range index — the same "let the underlying Java
+                    // exception propagate uncaught" precedent ARRAY_GET already sets.
+                    frame.operandStack().push(programArgs.get(index));
                 }
                 case HALT -> {
                     return;
