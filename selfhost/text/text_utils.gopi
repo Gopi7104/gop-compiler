@@ -1,0 +1,89 @@
+// text_utils.gopi - BRL v1.0 Phase 3: ASCII classification and text
+// operations, built entirely on B1's VM intrinsics (charCodeAt/textLength/
+// textFromCharCode) - no new VM primitive, no dependency on any other BRL
+// file. GopiLang's own lexer is ASCII-only (isAlpha/isDigit are plain
+// char-code range checks), and these mirror it exactly.
+
+flag isDigit(num code) {
+    give code >= 48 && code <= 57;
+}
+
+flag isAlpha(num code) {
+    give (code >= 97 && code <= 122) || (code >= 65 && code <= 90) || code == 95;
+}
+
+flag isAlphaNumeric(num code) {
+    give isAlpha(code) || isDigit(code);
+}
+
+// Space, tab, carriage return only - NOT newline. This mirrors the real
+// Lexer's own case split exactly: its scanner treats '\n' as a separate
+// case (it also increments the line counter), never lumped in with
+// ordinary whitespace.
+flag isWhitespace(num code) {
+    give code == 32 || code == 9 || code == 13;
+}
+
+flag isNewline(num code) {
+    give code == 10;
+}
+
+// [start, end) - half-open, matching Java's String.substring(start, end)
+// exactly, which is what the real Lexer already uses to extract every
+// token's lexeme (source.substring(start, current)).
+text substring(text s, num start, num end) {
+    text result = "";
+    num i = start;
+    loop (i < end) {
+        result = result + textFromCharCode(charCodeAt(s, i));
+        i = i + 1;
+    }
+    give result;
+}
+
+text repeat(text unit, num count) {
+    text result = "";
+    num i = 0;
+    loop (i < count) {
+        result = result + unit;
+        i = i + 1;
+    }
+    give result;
+}
+
+text reverseText(text s) {
+    text result = "";
+    num i = textLength(s) - 1;
+    loop (i >= 0) {
+        result = result + textFromCharCode(charCodeAt(s, i));
+        i = i - 1;
+    }
+    give result;
+}
+
+// Note: this negates n to get its magnitude, which overflows for the
+// minimum representable num (there is no positive num large enough to hold
+// its absolute value). Not handled specially - this library has no reason
+// to expect that value (line numbers, counts, and similar compiler-internal
+// numbers never approach it), so it is documented here rather than guarded.
+text numToText(num n) {
+    if (n == 0) {
+        give "0";
+    }
+    flag negative = n < 0;
+    num magnitude = n;
+    if (negative) {
+        magnitude = -n;
+    }
+    text digits = "";
+    loop (magnitude > 0) {
+        num digit = magnitude % 10;
+        digits = digits + textFromCharCode(digit + 48);
+        magnitude = magnitude / 10;
+    }
+    text reversed = reverseText(digits);
+    if (negative) {
+        give "-" + reversed;
+    }
+    give reversed;
+}

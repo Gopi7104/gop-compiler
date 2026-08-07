@@ -1,0 +1,66 @@
+// vector_dec.gopi - compiler-internal growable array of dec.
+//
+// This is NOT part of BRL v1.0. BRL remains exactly as frozen: VectorNum,
+// VectorText, HashMapTextToNum, HashSetOfText, the text utilities,
+// StringBuilder, and DiagnosticBuffer are its complete, unchanged public
+// surface - nothing here is added to it. This file exists solely because
+// the self-hosted Lexer needs temporary growable storage for parsed
+// decimal literal values (TokenStream.literalDecimals) - a need specific
+// to this compiler's own implementation, not a general-purpose capability
+// offered to GopiLang programs. It lives under selfhost/lexer/, not
+// selfhost/collections/, specifically so it is never mistaken for a BRL
+// type, and it is never concatenated into anything except this compiler's
+// own build.
+//
+// Shape and operations exactly mirror VectorNum (see
+// selfhost/collections/vector_num.gopi) for the same reasons: no capacity
+// field (items.len() already gives it), no get/set/size/isEmpty/reserve
+// (direct field access - v.items[i], v.count - already does everything
+// those would, with no encapsulation to hide behind).
+
+struct VectorDec {
+    dec[] items;
+    num count;
+}
+
+VectorDec vectorDecCreate() {
+    give new VectorDec(new dec[4], 0);
+}
+
+none vectorDecGrow(VectorDec v) {
+    num newCapacity = v.items.len() * 2;
+    dec[] newItems = new dec[newCapacity];
+    num i = 0;
+    loop (i < v.count) {
+        newItems[i] = v.items[i];
+        i = i + 1;
+    }
+    v.items = newItems;
+}
+
+none vectorDecPush(VectorDec v, dec value) {
+    if (v.count == v.items.len()) {
+        vectorDecGrow(v);
+    }
+    v.items[v.count] = value;
+    v.count = v.count + 1;
+}
+
+dec vectorDecPop(VectorDec v) {
+    v.count = v.count - 1;
+    give v.items[v.count];
+}
+
+none vectorDecClear(VectorDec v) {
+    v.count = 0;
+}
+
+VectorDec vectorDecCopy(VectorDec v) {
+    dec[] newItems = new dec[v.items.len()];
+    num i = 0;
+    loop (i < v.count) {
+        newItems[i] = v.items[i];
+        i = i + 1;
+    }
+    give new VectorDec(newItems, v.count);
+}

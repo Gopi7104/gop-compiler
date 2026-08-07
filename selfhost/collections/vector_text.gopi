@@ -1,0 +1,55 @@
+// vector_text.gopi - BRL v1.0 Phase 2: a growable array of text.
+//
+// Exact mirror of vector_num.gopi with text[] instead of num[] - GopiLang has
+// no function overloading (functionTable is a flat, name-keyed map with one
+// entry per name) and no generics, so a second, fully duplicated file is the
+// only way to get a growable text array; this is a hard language constraint,
+// not a style preference. See vector_num.gopi for the full set of invariants
+// and design notes this file follows identically.
+
+struct VectorText {
+    text[] items;
+    num count;
+}
+
+VectorText vectorTextCreate() {
+    give new VectorText(new text[4], 0);
+}
+
+none vectorTextGrow(VectorText v) {
+    num newCapacity = v.items.len() * 2;
+    text[] newItems = new text[newCapacity];
+    num i = 0;
+    loop (i < v.count) {
+        newItems[i] = v.items[i];
+        i = i + 1;
+    }
+    v.items = newItems;
+}
+
+none vectorTextPush(VectorText v, text value) {
+    if (v.count == v.items.len()) {
+        vectorTextGrow(v);
+    }
+    v.items[v.count] = value;
+    v.count = v.count + 1;
+}
+
+text vectorTextPop(VectorText v) {
+    v.count = v.count - 1;
+    give v.items[v.count];
+}
+
+none vectorTextClear(VectorText v) {
+    v.count = 0;
+}
+
+VectorText vectorTextCopy(VectorText v) {
+    text[] newItems = new text[v.items.len()];
+    num i = 0;
+    loop (i < v.count) {
+        newItems[i] = v.items[i];
+        i = i + 1;
+    }
+    give new VectorText(newItems, v.count);
+}

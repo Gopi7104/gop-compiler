@@ -1,0 +1,244 @@
+// hash_map_text_to_num.gopi - BRL v1.0 Phase 4: open addressing, linear
+// probing, tombstone deletion. Built entirely from vector_text.gopi and
+// vector_num.gopi - concatenate both before this file. No new collection
+// type: "capacity" slots are three same-length vectors used as fixed-size
+// arrays between resizes (grown only by rebuilding, never by push/pop).
+//
+// state.items[i] is one of:
+//   0 = empty    - never used, or reset by clear()/grow()
+//   1 = occupied - keys.items[i]/values.items[i] hold a live entry
+//   2 = deleted  - a tombstone: still ends nothing (probing must continue
+//                  past it), but no longer a live entry
+//
+// A plain 2-state "occupied" flag cannot support remove() correctly under
+// linear probing: un-marking a removed slot as empty would break the probe
+// chain for any OTHER key that hashed into the same bucket and probed past
+// it - a later get() for that other key would stop at the wrongly-emptied
+// slot and report "not found" even though the key is still present further
+// along the chain. Tombstones keep the chain intact.
+//
+// count is NOT the number of live entries - it is the number of slots that
+// have transitioned away from empty since the last full rebuild (create,
+// grow, or clear), i.e. occupied + deleted combined. This is deliberate:
+// remove() cannot decrement a live-entry counter without losing exactly the
+// information above (a rebuild is the only thing allowed to reclaim a
+// tombstoned slot's spot in the load-factor accounting). If growth were
+// keyed on live-entry count alone, a program that repeatedly inserts and
+// removes distinct keys would never trigger a rebuild, tombstones would
+// accumulate without bound, and eventually every slot would read
+// "non-empty" - at which point put()/get()/contains()/remove()'s probe
+// loops would never terminate. Keying growth on occupied+deleted guarantees
+// a rebuild (which discards every tombstone) fires before that can happen.
+
+struct HashMapTextToNum {
+    VectorText keys;
+    VectorNum values;
+    VectorNum state;
+    num count;
+}
+
+num hashMapHash(text key, num capacity) {
+    num h = 0;
+    num length = textLength(key);
+    num i = 0;
+    loop (i < length) {
+        h = h * 31 + charCodeAt(key, i);
+        i = i + 1;
+    }
+    // num is int32; a long key's hash can overflow into negative territory
+    // (well-defined wraparound - still a valid, if unpredictable, hash), and
+    // % on a negative dividend can itself return a negative remainder. Both
+    // are normalized into [0, capacity) here so every caller gets a valid
+    // slot index unconditionally.
+    num slot = h % capacity;
+    if (slot < 0) {
+        slot = slot + capacity;
+    }
+    give slot;
+}
+
+HashMapTextToNum hashMapCreate() {
+    VectorText keys = vectorTextCreate();
+    VectorNum values = vectorNumCreate();
+    VectorNum state = vectorNumCreate();
+    num i = 0;
+    loop (i < 8) {
+        vectorTextPush(keys, "");
+        vectorNumPush(values, 0);
+        vectorNumPush(state, 0);
+        i = i + 1;
+    }
+    give new HashMapTextToNum(keys, values, state, 0);
+}
+
+// Inserts, or updates in place if the key already exists anywhere in its
+// probe chain. Grows first if inserting one more entry would push occupied
+// slots to 70% of capacity or beyond.
+none hashMapPut(HashMapTextToNum m, text key, num value) {
+    if ((m.count + 1) * 10 >= m.keys.count * 7) {
+        hashMapGrow(m);
+    }
+
+    num capacity = m.keys.count;
+    num slot = hashMapHash(key, capacity);
+    num firstTombstone = -1;
+    flag done = no;
+    loop (!done) {
+        num slotState = m.state.items[slot];
+        if (slotState == 0) {
+            // Probe chain ends here with certainty the key is not present
+            // elsewhere - insert at the first tombstone seen along the way,
+            // or right here if none was seen.
+            num insertSlot = slot;
+            flag reusingTombstone = no;
+            if (firstTombstone >= 0) {
+                insertSlot = firstTombstone;
+                reusingTombstone = yes;
+            }
+            m.keys.items[insertSlot] = key;
+            m.values.items[insertSlot] = value;
+            m.state.items[insertSlot] = 1;
+            if (!reusingTombstone) {
+                m.count = m.count + 1;
+            }
+            done = yes;
+        } else {
+            if (slotState == 1 && m.keys.items[slot] == key) {
+                m.values.items[slot] = value;
+                done = yes;
+            } else {
+                if (slotState == 2 && firstTombstone < 0) {
+                    firstTombstone = slot;
+                }
+                slot = (slot + 1) % capacity;
+            }
+        }
+    }
+}
+
+// Undefined for a missing key - the caller must check contains() first,
+// exactly as B1's readFile() trusts the caller to check fileExists()-style
+// preconditions itself; there is no meaningful sentinel a num return value
+// could carry (0 is a perfectly ordinary stored value), and GopiLang has no
+// Optional/exception to signal absence any other way. Returns 0 if the key
+// is absent, but that 0 carries no meaning.
+num hashMapGet(HashMapTextToNum m, text key) {
+    num capacity = m.keys.count;
+    num slot = hashMapHash(key, capacity);
+    flag finished = no;
+    num result = 0;
+    loop (!finished) {
+        num slotState = m.state.items[slot];
+        if (slotState == 0) {
+            finished = yes;
+        } else {
+            if (slotState == 1 && m.keys.items[slot] == key) {
+                result = m.values.items[slot];
+                finished = yes;
+            } else {
+                slot = (slot + 1) % capacity;
+            }
+        }
+    }
+    give result;
+}
+
+flag hashMapContains(HashMapTextToNum m, text key) {
+    num capacity = m.keys.count;
+    num slot = hashMapHash(key, capacity);
+    flag finished = no;
+    flag found = no;
+    loop (!finished) {
+        num slotState = m.state.items[slot];
+        if (slotState == 0) {
+            finished = yes;
+        } else {
+            if (slotState == 1 && m.keys.items[slot] == key) {
+                found = yes;
+                finished = yes;
+            } else {
+                slot = (slot + 1) % capacity;
+            }
+        }
+    }
+    give found;
+}
+
+// A no-op if the key is absent (matching Java Map.remove()'s own harmless
+// no-op on a missing key). Marks the slot deleted rather than empty - see
+// the tombstone note above - and does not decrement count.
+none hashMapRemove(HashMapTextToNum m, text key) {
+    num capacity = m.keys.count;
+    num slot = hashMapHash(key, capacity);
+    flag finished = no;
+    loop (!finished) {
+        num slotState = m.state.items[slot];
+        if (slotState == 0) {
+            finished = yes;
+        } else {
+            if (slotState == 1 && m.keys.items[slot] == key) {
+                m.state.items[slot] = 2;
+                m.keys.items[slot] = "";
+                m.values.items[slot] = 0;
+                finished = yes;
+            } else {
+                slot = (slot + 1) % capacity;
+            }
+        }
+    }
+}
+
+// Resets every slot to empty - does not reallocate, mirroring
+// vectorNumClear()/vectorTextClear()'s own "count only" reset.
+none hashMapClear(HashMapTextToNum m) {
+    num capacity = m.keys.count;
+    num i = 0;
+    loop (i < capacity) {
+        m.state.items[i] = 0;
+        m.keys.items[i] = "";
+        m.values.items[i] = 0;
+        i = i + 1;
+    }
+    m.count = 0;
+}
+
+// Doubles capacity and rebuilds from scratch, re-inserting only the LIVE
+// entries - tombstones are dropped here, which is what keeps them from
+// accumulating across the table's lifetime (see the note on count above).
+// Reuses hashMapPut() for reinsertion rather than duplicating the probe
+// logic: the new table starts at double the old capacity and receives at
+// most the old table's occupied-slot count (which was, by construction,
+// still under 70% of the OLD capacity when this fired), so the reinsertion
+// loop lands at roughly 35% of the NEW capacity - comfortably below the
+// growth threshold, so this can never recursively trigger another grow().
+none hashMapGrow(HashMapTextToNum m) {
+    VectorText oldKeys = m.keys;
+    VectorNum oldValues = m.values;
+    VectorNum oldState = m.state;
+    num oldCapacity = oldKeys.count;
+    num newCapacity = oldCapacity * 2;
+
+    VectorText newKeys = vectorTextCreate();
+    VectorNum newValues = vectorNumCreate();
+    VectorNum newState = vectorNumCreate();
+    num i = 0;
+    loop (i < newCapacity) {
+        vectorTextPush(newKeys, "");
+        vectorNumPush(newValues, 0);
+        vectorNumPush(newState, 0);
+        i = i + 1;
+    }
+
+    m.keys = newKeys;
+    m.values = newValues;
+    m.state = newState;
+    m.count = 0;
+
+    num oldSlot = 0;
+    loop (oldSlot < oldCapacity) {
+        if (oldState.items[oldSlot] == 1) {
+            hashMapPut(m, oldKeys.items[oldSlot], oldValues.items[oldSlot]);
+        }
+        oldSlot = oldSlot + 1;
+    }
+}

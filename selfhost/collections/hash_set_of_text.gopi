@@ -1,0 +1,29 @@
+// hash_set_of_text.gopi - BRL v1.0 Phase 4: a thin wrapper over
+// HashMapTextToNum. Depends on vector_text.gopi, vector_num.gopi, and
+// hash_map_text_to_num.gopi - concatenate all three before this file.
+// The map's value slot is unused for set membership; 0 is stored
+// arbitrarily and carries no meaning.
+
+struct HashSetOfText {
+    HashMapTextToNum entries;
+}
+
+HashSetOfText hashSetCreate() {
+    give new HashSetOfText(hashMapCreate());
+}
+
+none hashSetAdd(HashSetOfText s, text value) {
+    hashMapPut(s.entries, value, 0);
+}
+
+flag hashSetContains(HashSetOfText s, text value) {
+    give hashMapContains(s.entries, value);
+}
+
+none hashSetRemove(HashSetOfText s, text value) {
+    hashMapRemove(s.entries, value);
+}
+
+none hashSetClear(HashSetOfText s) {
+    hashMapClear(s.entries);
+}

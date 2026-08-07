@@ -1,0 +1,512 @@
+// lexer.gopi - Phase 1: the self-hosted Lexer. A line-for-line mirror of
+// Lexer.java's structure (see ARCHITECTURE.md), translated into GopiLang's
+// data-oriented shape:
+//   - LexerState carries every field Lexer.java's instance fields hold,
+//     passed explicitly to every function instead of an implicit `this`.
+//   - TokenStream replaces java.util.List<Token> as a structure-of-arrays,
+//     built entirely from BRL's VectorNum/VectorText plus the
+//     compiler-internal VectorDec (see vector_dec.gopi).
+//   - Token-kind identifiers are plain zero-argument functions
+//     (tokenKindXxx()), numbered in the same order Java's TokenType enum
+//     declares them, purely for cross-referencing convenience - the
+//     numbering has no functional significance beyond being stable and
+//     unique.
+//   - There are no exceptions. Rereading Lexer.java's every LexerException
+//     site shows each one is either handled in the same function that
+//     detects it, or thrown from a leaf function with nothing else
+//     happening between the throw and its catch one frame up - there is no
+//     deep unwinding anywhere in this phase. So every scan function here
+//     just reports its own diagnostic (via DiagnosticBuffer) and skips
+//     calling tokenStreamAppend on failure, which is exactly what "an
+//     exception was thrown, no token was added" already amounts to.
+
+// ---------------------------------------------------------------------
+// Token kinds
+// ---------------------------------------------------------------------
+
+num tokenKindIntLiteral() { give 0; }
+num tokenKindFloatLiteral() { give 1; }
+num tokenKindStringLiteral() { give 2; }
+num tokenKindBooleanLiteral() { give 3; }
+num tokenKindIdentifier() { give 4; }
+num tokenKindKwInt() { give 5; }
+num tokenKindKwFloat() { give 6; }
+num tokenKindKwBool() { give 7; }
+num tokenKindKwString() { give 8; }
+num tokenKindKwVoid() { give 9; }
+num tokenKindKwIf() { give 10; }
+num tokenKindKwElse() { give 11; }
+num tokenKindKwWhile() { give 12; }
+num tokenKindKwFor() { give 13; }
+num tokenKindKwReturn() { give 14; }
+num tokenKindKwPrint() { give 15; }
+num tokenKindKwNew() { give 16; }
+num tokenKindKwStruct() { give 17; }
+num tokenKindPlus() { give 18; }
+num tokenKindMinus() { give 19; }
+num tokenKindStar() { give 20; }
+num tokenKindSlash() { give 21; }
+num tokenKindPercent() { give 22; }
+num tokenKindAssign() { give 23; }
+num tokenKindEqualEqual() { give 24; }
+num tokenKindBangEqual() { give 25; }
+num tokenKindLess() { give 26; }
+num tokenKindGreater() { give 27; }
+num tokenKindLessEqual() { give 28; }
+num tokenKindGreaterEqual() { give 29; }
+num tokenKindAndAnd() { give 30; }
+num tokenKindOrOr() { give 31; }
+num tokenKindBang() { give 32; }
+num tokenKindSemicolon() { give 33; }
+num tokenKindComma() { give 34; }
+num tokenKindDot() { give 35; }
+num tokenKindLeftParen() { give 36; }
+num tokenKindRightParen() { give 37; }
+num tokenKindLeftBrace() { give 38; }
+num tokenKindRightBrace() { give 39; }
+num tokenKindLeftBracket() { give 40; }
+num tokenKindRightBracket() { give 41; }
+num tokenKindEof() { give 42; }
+
+// ---------------------------------------------------------------------
+// TokenStream - structure-of-arrays, one row per token across every
+// column. tokenStreamAppend() is the only function allowed to push onto
+// these vectors, and it always pushes to all eight together - exactly the
+// alignment invariant DiagnosticBuffer.append() already established.
+// Every literal column gets a harmless default when it doesn't apply to a
+// given token's kind (0 / 0.0 / 0 / "") - never read, never meaningful,
+// present purely to keep the columns the same length.
+// ---------------------------------------------------------------------
+
+struct TokenStream {
+    VectorNum types;
+    VectorText lexemes;
+    VectorNum literalNumbers;
+    VectorDec literalDecimals;
+    VectorNum literalBools;
+    VectorText literalTexts;
+    VectorNum lines;
+    VectorNum columns;
+}
+
+TokenStream tokenStreamCreate() {
+    give new TokenStream(
+            vectorNumCreate(), vectorTextCreate(), vectorNumCreate(), vectorDecCreate(),
+            vectorNumCreate(), vectorTextCreate(), vectorNumCreate(), vectorNumCreate());
+}
+
+none tokenStreamAppend(TokenStream stream, num kind, text lexeme, num line, num column,
+        num literalNumber, dec literalDecimal, num literalBool, text literalText) {
+    vectorNumPush(stream.types, kind);
+    vectorTextPush(stream.lexemes, lexeme);
+    vectorNumPush(stream.literalNumbers, literalNumber);
+    vectorDecPush(stream.literalDecimals, literalDecimal);
+    vectorNumPush(stream.literalBools, literalBool);
+    vectorTextPush(stream.literalTexts, literalText);
+    vectorNumPush(stream.lines, line);
+    vectorNumPush(stream.columns, column);
+}
+
+// ---------------------------------------------------------------------
+// LexerState - the direct translation of Lexer.java's instance fields.
+// keywords has no static/class-level home to live in (no global mutable
+// state), so it is rebuilt once per LexerState - negligible cost, lexing
+// happens once per compilation.
+// ---------------------------------------------------------------------
+
+struct LexerState {
+    text source;
+    num start;
+    num current;
+    num line;
+    num lineStart;
+    num tokenLine;
+    num tokenColumn;
+    HashMapTextToNum keywords;
+    TokenStream tokens;
+    DiagnosticBuffer diagnostics;
+}
+
+HashMapTextToNum lexerBuildKeywords() {
+    HashMapTextToNum keywords = hashMapCreate();
+    hashMapPut(keywords, "num", tokenKindKwInt());
+    hashMapPut(keywords, "dec", tokenKindKwFloat());
+    hashMapPut(keywords, "flag", tokenKindKwBool());
+    hashMapPut(keywords, "text", tokenKindKwString());
+    hashMapPut(keywords, "none", tokenKindKwVoid());
+    hashMapPut(keywords, "if", tokenKindKwIf());
+    hashMapPut(keywords, "else", tokenKindKwElse());
+    hashMapPut(keywords, "loop", tokenKindKwWhile());
+    hashMapPut(keywords, "run", tokenKindKwFor());
+    hashMapPut(keywords, "give", tokenKindKwReturn());
+    hashMapPut(keywords, "show", tokenKindKwPrint());
+    hashMapPut(keywords, "new", tokenKindKwNew());
+    hashMapPut(keywords, "struct", tokenKindKwStruct());
+    hashMapPut(keywords, "yes", tokenKindBooleanLiteral());
+    hashMapPut(keywords, "no", tokenKindBooleanLiteral());
+    give keywords;
+}
+
+LexerState lexerCreate(text source) {
+    give new LexerState(source, 0, 0, 1, 0, 1, 1, lexerBuildKeywords(), tokenStreamCreate(), diagnosticBufferCreate());
+}
+
+// ---------------------------------------------------------------------
+// Character-stream helpers
+// ---------------------------------------------------------------------
+
+flag lexerIsAtEnd(LexerState state) {
+    give state.current >= textLength(state.source);
+}
+
+num lexerAdvance(LexerState state) {
+    num c = charCodeAt(state.source, state.current);
+    state.current = state.current + 1;
+    give c;
+}
+
+// charCodeAt() already returns -1 past the end of the text (a B1 builtin
+// invariant), so these need no separate isAtEnd() check of their own -
+// reusing that sentinel directly is what Java's peek()/peekNext() returning
+// '\0' at end amounts to here.
+num lexerPeek(LexerState state) {
+    give charCodeAt(state.source, state.current);
+}
+
+num lexerPeekNext(LexerState state) {
+    give charCodeAt(state.source, state.current + 1);
+}
+
+flag lexerMatch(LexerState state, num expected) {
+    if (lexerIsAtEnd(state)) {
+        give no;
+    }
+    if (charCodeAt(state.source, state.current) != expected) {
+        give no;
+    }
+    state.current = state.current + 1;
+    give yes;
+}
+
+none lexerAddSimpleToken(LexerState state, num kind) {
+    text lexeme = substring(state.source, state.start, state.current);
+    tokenStreamAppend(state.tokens, kind, lexeme, state.tokenLine, state.tokenColumn, 0, 0, 0, "");
+}
+
+// ---------------------------------------------------------------------
+// Integer literal parsing - the Lexer's own responsibility, never exposed
+// as a general BRL utility. lexerIntLiteralOverflows() reproduces the one
+// diagnostic Integer.parseInt's NumberFormatException gives Java for free:
+// a standard pre-multiply overflow check (value > INT32_MAX/10, or exactly
+// INT32_MAX/10 with a final digit > 7), since GopiLang num arithmetic
+// silently wraps instead of throwing.
+// ---------------------------------------------------------------------
+
+flag lexerIntLiteralOverflows(text lexeme) {
+    num length = textLength(lexeme);
+    num value = 0;
+    num i = 0;
+    flag overflow = no;
+    loop (i < length) {
+        num digit = charCodeAt(lexeme, i) - 48;
+        if (value > 214748364 || (value == 214748364 && digit > 7)) {
+            overflow = yes;
+        }
+        if (!overflow) {
+            value = value * 10 + digit;
+        }
+        i = i + 1;
+    }
+    give overflow;
+}
+
+num lexerParseIntLiteral(text lexeme) {
+    num length = textLength(lexeme);
+    num value = 0;
+    num i = 0;
+    loop (i < length) {
+        num digit = charCodeAt(lexeme, i) - 48;
+        value = value * 10 + digit;
+        i = i + 1;
+    }
+    give value;
+}
+
+// Decimal literal parsing - also entirely the Lexer's own responsibility
+// (Change 2: every later phase receives an already-parsed, real dec value,
+// never raw text). The lexeme is guaranteed well-formed by scanNumber's own
+// character consumption (digits, exactly one '.', digits), so unlike the
+// integer case there is no failure mode to detect - Double.parseDouble
+// never throws for a string this scanner can produce, and neither does
+// this. Both the integer part and the fractional part accumulate as dec
+// from their first digit (never through num), which is what avoids int32
+// overflow on the integer part; one division at the end combines them.
+//
+// The accumulators are deliberately seeded with dec LITERALS (0.0 / 1.0),
+// never with bare num literals (0 / 1). CodeGenerator never emits a
+// widening conversion when a dec-typed variable is initialized from a
+// num-typed expression - the value stays a raw boxed Integer at runtime
+// despite its declared type, and the VM's arithmetic only widens to double
+// when it observes an actual Double operand. A dec variable seeded from an
+// int literal and then only ever touched by more int-literal-derived
+// arithmetic (exactly what naive digit accumulation looks like) would
+// silently stay integer-valued the whole way through, making the final
+// division below truncate instead of dividing - confirmed directly: `dec a
+// = 0; a = a + 5;` prints "5", not "5.0". Seeding from a genuine dec
+// literal keeps every accumulator a real Double for the rest of this
+// function, sidestepping the gap entirely. This is a pre-existing property
+// of the frozen, unmodified VM/CodeGenerator, not something introduced or
+// fixed here - flagged in the Phase 1 completion report for later phases
+// to be aware of.
+dec lexerParseDecLiteral(text lexeme) {
+    num length = textLength(lexeme);
+    dec integerPart = 0.0;
+    num i = 0;
+    loop (i < length && charCodeAt(lexeme, i) != 46) {
+        integerPart = integerPart * 10 + (charCodeAt(lexeme, i) - 48);
+        i = i + 1;
+    }
+    i = i + 1;
+    dec fractionalValue = 0.0;
+    dec scale = 1.0;
+    loop (i < length) {
+        fractionalValue = fractionalValue * 10 + (charCodeAt(lexeme, i) - 48);
+        scale = scale * 10;
+        i = i + 1;
+    }
+    give integerPart + fractionalValue / scale;
+}
+
+none lexerScanNumber(LexerState state) {
+    loop (isDigit(lexerPeek(state))) {
+        lexerAdvance(state);
+    }
+    flag isFloat = no;
+    if (lexerPeek(state) == 46 && isDigit(lexerPeekNext(state))) {
+        isFloat = yes;
+        lexerAdvance(state);
+        loop (isDigit(lexerPeek(state))) {
+            lexerAdvance(state);
+        }
+    }
+
+    text lexeme = substring(state.source, state.start, state.current);
+    if (isFloat) {
+        dec value = lexerParseDecLiteral(lexeme);
+        tokenStreamAppend(state.tokens, tokenKindFloatLiteral(), lexeme, state.tokenLine, state.tokenColumn, 0, value, 0, "");
+    } else {
+        if (lexerIntLiteralOverflows(lexeme)) {
+            diagnosticBufferAppend(state.diagnostics, "Lexical Error", state.tokenLine, state.tokenColumn,
+                    "integer literal '" + lexeme + "' is too large",
+                    "GopiLang int literals must fit in a 32-bit signed integer");
+        } else {
+            num value = lexerParseIntLiteral(lexeme);
+            tokenStreamAppend(state.tokens, tokenKindIntLiteral(), lexeme, state.tokenLine, state.tokenColumn, value, 0, 0, "");
+        }
+    }
+}
+
+// ---------------------------------------------------------------------
+// String literal scanning
+// ---------------------------------------------------------------------
+
+none lexerScanString(LexerState state) {
+    StringBuilder content = stringBuilderCreate();
+    flag done = no;
+    loop (!done) {
+        num c = lexerPeek(state);
+        if (c == 34 || c == 10 || c == -1) {
+            done = yes;
+        } else {
+            if (c == 92) {
+                num escapeLine = state.line;
+                num escapeColumn = state.current - state.lineStart + 1;
+                lexerAdvance(state);
+                num afterBackslash = lexerPeek(state);
+                if (afterBackslash == -1 || afterBackslash == 10) {
+                    done = yes;
+                } else {
+                    num next = lexerAdvance(state);
+                    if (next == 110) {
+                        stringBuilderAppendChar(content, 10);
+                    } else {
+                        if (next == 116) {
+                            stringBuilderAppendChar(content, 9);
+                        } else {
+                            if (next == 34) {
+                                stringBuilderAppendChar(content, 34);
+                            } else {
+                                if (next == 92) {
+                                    stringBuilderAppendChar(content, 92);
+                                } else {
+                                    diagnosticBufferAppend(state.diagnostics, "Lexical Error", escapeLine, escapeColumn,
+                                            "unknown escape sequence '\\" + textFromCharCode(next) + "'",
+                                            "supported escapes are \\n, \\t, \\\", and \\\\");
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                stringBuilderAppendChar(content, lexerAdvance(state));
+            }
+        }
+    }
+
+    if (lexerPeek(state) == 10 || lexerIsAtEnd(state)) {
+        diagnosticBufferAppend(state.diagnostics, "Lexical Error", state.tokenLine, state.tokenColumn,
+                "unterminated string literal",
+                "strings cannot span multiple lines - add a closing '\"', or use \\n for a newline");
+    } else {
+        lexerAdvance(state);
+        text lexeme = substring(state.source, state.start, state.current);
+        tokenStreamAppend(state.tokens, tokenKindStringLiteral(), lexeme, state.tokenLine, state.tokenColumn,
+                0, 0, 0, stringBuilderBuild(content));
+    }
+}
+
+// ---------------------------------------------------------------------
+// Identifier / keyword scanning
+// ---------------------------------------------------------------------
+
+none lexerScanIdentifierOrKeyword(LexerState state) {
+    loop (isAlphaNumeric(lexerPeek(state))) {
+        lexerAdvance(state);
+    }
+    text lexeme = substring(state.source, state.start, state.current);
+    if (hashMapContains(state.keywords, lexeme)) {
+        num kind = hashMapGet(state.keywords, lexeme);
+        if (kind == tokenKindBooleanLiteral()) {
+            num boolValue = 0;
+            if (lexeme == "yes") {
+                boolValue = 1;
+            }
+            tokenStreamAppend(state.tokens, kind, lexeme, state.tokenLine, state.tokenColumn, 0, 0, boolValue, "");
+        } else {
+            tokenStreamAppend(state.tokens, kind, lexeme, state.tokenLine, state.tokenColumn, 0, 0, 0, "");
+        }
+    } else {
+        tokenStreamAppend(state.tokens, tokenKindIdentifier(), lexeme, state.tokenLine, state.tokenColumn, 0, 0, 0, "");
+    }
+}
+
+// ---------------------------------------------------------------------
+// Slash: line comment vs division
+// ---------------------------------------------------------------------
+
+none lexerScanSlash(LexerState state) {
+    if (lexerMatch(state, 47)) {
+        loop (lexerPeek(state) != 10 && !lexerIsAtEnd(state)) {
+            lexerAdvance(state);
+        }
+    } else {
+        lexerAddSimpleToken(state, tokenKindSlash());
+    }
+}
+
+// ---------------------------------------------------------------------
+// Main per-character dispatch - an if/else-if chain in exactly the order
+// Lexer.java's own switch lists its cases, standing in for a switch
+// GopiLang doesn't have.
+// ---------------------------------------------------------------------
+
+none lexerScanToken(LexerState state) {
+    num c = lexerAdvance(state);
+
+    if (c == 32 || c == 9 || c == 13) {
+        // whitespace: ignore
+    } else if (c == 10) {
+        state.line = state.line + 1;
+        state.lineStart = state.current;
+    } else if (c == 40) {
+        lexerAddSimpleToken(state, tokenKindLeftParen());
+    } else if (c == 41) {
+        lexerAddSimpleToken(state, tokenKindRightParen());
+    } else if (c == 123) {
+        lexerAddSimpleToken(state, tokenKindLeftBrace());
+    } else if (c == 125) {
+        lexerAddSimpleToken(state, tokenKindRightBrace());
+    } else if (c == 91) {
+        lexerAddSimpleToken(state, tokenKindLeftBracket());
+    } else if (c == 93) {
+        lexerAddSimpleToken(state, tokenKindRightBracket());
+    } else if (c == 59) {
+        lexerAddSimpleToken(state, tokenKindSemicolon());
+    } else if (c == 44) {
+        lexerAddSimpleToken(state, tokenKindComma());
+    } else if (c == 46) {
+        lexerAddSimpleToken(state, tokenKindDot());
+    } else if (c == 43) {
+        lexerAddSimpleToken(state, tokenKindPlus());
+    } else if (c == 45) {
+        lexerAddSimpleToken(state, tokenKindMinus());
+    } else if (c == 42) {
+        lexerAddSimpleToken(state, tokenKindStar());
+    } else if (c == 37) {
+        lexerAddSimpleToken(state, tokenKindPercent());
+    } else if (c == 47) {
+        lexerScanSlash(state);
+    } else if (c == 61) {
+        if (lexerMatch(state, 61)) {
+            lexerAddSimpleToken(state, tokenKindEqualEqual());
+        } else {
+            lexerAddSimpleToken(state, tokenKindAssign());
+        }
+    } else if (c == 33) {
+        if (lexerMatch(state, 61)) {
+            lexerAddSimpleToken(state, tokenKindBangEqual());
+        } else {
+            lexerAddSimpleToken(state, tokenKindBang());
+        }
+    } else if (c == 60) {
+        if (lexerMatch(state, 61)) {
+            lexerAddSimpleToken(state, tokenKindLessEqual());
+        } else {
+            lexerAddSimpleToken(state, tokenKindLess());
+        }
+    } else if (c == 62) {
+        if (lexerMatch(state, 61)) {
+            lexerAddSimpleToken(state, tokenKindGreaterEqual());
+        } else {
+            lexerAddSimpleToken(state, tokenKindGreater());
+        }
+    } else if (c == 38) {
+        if (lexerMatch(state, 38)) {
+            lexerAddSimpleToken(state, tokenKindAndAnd());
+        } else {
+            diagnosticBufferAppend(state.diagnostics, "Lexical Error", state.tokenLine, state.tokenColumn,
+                    "unexpected character '&'", "GopiLang has no bitwise '&' - did you mean '&&'?");
+        }
+    } else if (c == 124) {
+        if (lexerMatch(state, 124)) {
+            lexerAddSimpleToken(state, tokenKindOrOr());
+        } else {
+            diagnosticBufferAppend(state.diagnostics, "Lexical Error", state.tokenLine, state.tokenColumn,
+                    "unexpected character '|'", "GopiLang has no bitwise '|' - did you mean '||'?");
+        }
+    } else if (c == 34) {
+        lexerScanString(state);
+    } else if (isDigit(c)) {
+        lexerScanNumber(state);
+    } else if (isAlpha(c)) {
+        lexerScanIdentifierOrKeyword(state);
+    } else {
+        diagnosticBufferAppend(state.diagnostics, "Lexical Error", state.tokenLine, state.tokenColumn,
+                "unexpected character '" + textFromCharCode(c) + "'", "");
+    }
+}
+
+// ---------------------------------------------------------------------
+// Driver
+// ---------------------------------------------------------------------
+
+TokenStream lexerScanTokens(LexerState state) {
+    loop (!lexerIsAtEnd(state)) {
+        state.start = state.current;
+        state.tokenLine = state.line;
+        state.tokenColumn = state.current - state.lineStart + 1;
+        lexerScanToken(state);
+    }
+    tokenStreamAppend(state.tokens, tokenKindEof(), "", state.line, state.current - state.lineStart + 1, 0, 0, 0, "");
+    give state.tokens;
+}

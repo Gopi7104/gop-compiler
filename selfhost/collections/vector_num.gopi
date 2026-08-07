@@ -1,0 +1,69 @@
+// vector_num.gopi - BRL v1.0 Phase 2: a growable array of num.
+//
+// No capacity field: v.items.len() IS the capacity. Only indices in
+// [0, count) are ever meaningful - a freshly allocated num[] holds Java
+// `null` in every slot until written, so reading beyond count reads
+// uninitialized data, not zero. Every operation below only ever reads or
+// writes indices in [0, count); nothing outside this file may rely on
+// anything at or past count.
+//
+// No get()/set()/size()/isEmpty()/reserve() - v.items[i] and v.count are
+// already directly accessible (GopiLang has no encapsulation to hide them
+// behind), so a wrapper function would be a second name for the same
+// operation with no behavioral difference.
+
+struct VectorNum {
+    num[] items;
+    num count;
+}
+
+VectorNum vectorNumCreate() {
+    give new VectorNum(new num[4], 0);
+}
+
+// Doubles the backing array and copies the live elements over. Never called
+// with items.len() == 0: vectorNumCreate()'s minimum capacity of 4 is
+// preserved by every operation that reallocates (this function and
+// vectorNumCopy()), so doubling never needs a from-zero special case.
+none vectorNumGrow(VectorNum v) {
+    num newCapacity = v.items.len() * 2;
+    num[] newItems = new num[newCapacity];
+    num i = 0;
+    loop (i < v.count) {
+        newItems[i] = v.items[i];
+        i = i + 1;
+    }
+    v.items = newItems;
+}
+
+none vectorNumPush(VectorNum v, num value) {
+    if (v.count == v.items.len()) {
+        vectorNumGrow(v);
+    }
+    v.items[v.count] = value;
+    v.count = v.count + 1;
+}
+
+num vectorNumPop(VectorNum v) {
+    v.count = v.count - 1;
+    give v.items[v.count];
+}
+
+// Resets count only - the backing array is kept as-is for reuse, never
+// reallocated or overwritten.
+none vectorNumClear(VectorNum v) {
+    v.count = 0;
+}
+
+// An independent copy: a fresh backing array, so mutating the copy never
+// affects the original (structs alias by reference otherwise - see
+// ARCHITECTURE.md on VirtualMachine.CALL's calling convention).
+VectorNum vectorNumCopy(VectorNum v) {
+    num[] newItems = new num[v.items.len()];
+    num i = 0;
+    loop (i < v.count) {
+        newItems[i] = v.items[i];
+        i = i + 1;
+    }
+    give new VectorNum(newItems, v.count);
+}

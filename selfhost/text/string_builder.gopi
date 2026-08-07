@@ -1,0 +1,45 @@
+// string_builder.gopi - BRL v1.0 Phase 3: a tiny append-only text builder.
+// Depends on vector_num.gopi (its internal buffer) and text_utils.gopi (for
+// numToText via appendNum) - concatenate both before this file.
+//
+// No formatting, no capacity tuning, no insert/delete, no random editing -
+// build() is the one place character codes become a single text value.
+
+struct StringBuilder {
+    VectorNum codes;
+}
+
+StringBuilder stringBuilderCreate() {
+    give new StringBuilder(vectorNumCreate());
+}
+
+none stringBuilderAppendChar(StringBuilder sb, num code) {
+    vectorNumPush(sb.codes, code);
+}
+
+none stringBuilderAppendText(StringBuilder sb, text s) {
+    num length = textLength(s);
+    num i = 0;
+    loop (i < length) {
+        stringBuilderAppendChar(sb, charCodeAt(s, i));
+        i = i + 1;
+    }
+}
+
+none stringBuilderAppendNum(StringBuilder sb, num n) {
+    stringBuilderAppendText(sb, numToText(n));
+}
+
+none stringBuilderClear(StringBuilder sb) {
+    vectorNumClear(sb.codes);
+}
+
+text stringBuilderBuild(StringBuilder sb) {
+    text result = "";
+    num i = 0;
+    loop (i < sb.codes.count) {
+        result = result + textFromCharCode(sb.codes.items[i]);
+        i = i + 1;
+    }
+    give result;
+}

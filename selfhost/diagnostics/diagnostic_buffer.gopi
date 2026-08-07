@@ -1,0 +1,76 @@
+// diagnostic_buffer.gopi - BRL v1.0 Phase 5: a structure-of-arrays
+// collection of diagnostics. Depends on vector_text.gopi, vector_num.gopi,
+// text_utils.gopi, and string_builder.gopi - concatenate all four before
+// this file.
+//
+// No VectorDiagnostic: five parallel vectors instead of one vector of
+// five-field records, reusing the two vector types this library already
+// has. diagnosticBufferAppend() is the ONLY function that may push onto
+// these vectors, and it always pushes to all five together in one call -
+// that is what keeps them aligned; nothing else may call vectorTextPush/
+// vectorNumPush directly on a DiagnosticBuffer's own fields.
+//
+// "phase" is a plain caller-supplied label (e.g. "Semantic Error", "Type
+// Error") - GopiLang has no enums, so there is no ErrorPhase-equivalent
+// type here; the caller decides what text to pass, exactly matching the
+// already-human-readable phase labels Java's own diagnostics render.
+//
+// suggestion == "" means "no suggestion" - no real suggestion message is
+// ever legitimately empty, so this is a safe sentinel (the same reasoning
+// already used for HashMapTextToNum's empty-slot key).
+//
+// render() intentionally does NOT reproduce Java's source-line-and-caret
+// window (the "12 |     p.y;" / "   |     ^^^" block): that requires the
+// original source line text and the diagnostic's end position, and this
+// struct - as specified - stores neither. What IS reproduced (phase,
+// message, line, column, suggestion) is rendered in a close, readable
+// approximation of Java's own format. repeat() has no legitimate use here
+// as a result - there is no underline to draw without a span to measure -
+// so it is not used, rather than forced in artificially.
+
+struct DiagnosticBuffer {
+    VectorText phases;
+    VectorNum lines;
+    VectorNum columns;
+    VectorText messages;
+    VectorText suggestions;
+}
+
+DiagnosticBuffer diagnosticBufferCreate() {
+    give new DiagnosticBuffer(vectorTextCreate(), vectorNumCreate(), vectorNumCreate(), vectorTextCreate(), vectorTextCreate());
+}
+
+none diagnosticBufferAppend(DiagnosticBuffer d, text phase, num line, num column, text message, text suggestion) {
+    vectorTextPush(d.phases, phase);
+    vectorNumPush(d.lines, line);
+    vectorNumPush(d.columns, column);
+    vectorTextPush(d.messages, message);
+    vectorTextPush(d.suggestions, suggestion);
+}
+
+num diagnosticBufferSize(DiagnosticBuffer d) {
+    give d.phases.count;
+}
+
+text diagnosticBufferRender(DiagnosticBuffer d) {
+    StringBuilder sb = stringBuilderCreate();
+    num i = 0;
+    loop (i < d.phases.count) {
+        stringBuilderAppendText(sb, d.phases.items[i]);
+        stringBuilderAppendText(sb, ": ");
+        stringBuilderAppendText(sb, d.messages.items[i]);
+        stringBuilderAppendText(sb, "\n  --> line ");
+        stringBuilderAppendNum(sb, d.lines.items[i]);
+        stringBuilderAppendText(sb, ", column ");
+        stringBuilderAppendNum(sb, d.columns.items[i]);
+        stringBuilderAppendText(sb, "\n");
+        if (!(d.suggestions.items[i] == "")) {
+            stringBuilderAppendText(sb, "Suggestion: ");
+            stringBuilderAppendText(sb, d.suggestions.items[i]);
+            stringBuilderAppendText(sb, "\n");
+        }
+        stringBuilderAppendText(sb, "\n");
+        i = i + 1;
+    }
+    give stringBuilderBuild(sb);
+}
