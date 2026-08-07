@@ -1,0 +1,236 @@
+// ast_printer.gopi - Project 2, Phase 7: renders a parsed program as a
+// Unicode tree, for the --ast CLI mode. Direct port of AstPrinter.java's
+// algorithm and exact labels - the recursive "└── "/"├── " connector and
+// "    "/"│   " prefix-continuation logic, and every node's exact label
+// text (including Java's default enum toString() spelling via
+// text_format.gopi's primTypeEnumName()/unaryOpEnumName()/
+// binaryOpEnumName(), and Object.toString() spelling for literal values -
+// "true"/"false" for BOOL, unquoted text for STRING, decToText() for FLOAT
+// - never the displayName() spelling diagnostics use).
+//
+// AstPrinter.java builds an intermediate TreeNode tree first, then renders
+// it in a separate pass; this port streams output directly (print my own
+// line, then recurse into each child with the updated prefix) since
+// GopiLang has no generic tree-of-labeled-nodes type to build one with -
+// the two passes collapse into one without changing any observable output,
+// since Java's own renderChildren() is already a pure function of the
+// already-built label tree with no cross-node computation.
+
+none astLine(StringBuilder out, text prefix, flag isLast, text label) {
+    stringBuilderAppendText(out, prefix);
+    if (isLast) {
+        stringBuilderAppendText(out, "└── ");
+    } else {
+        stringBuilderAppendText(out, "├── ");
+    }
+    stringBuilderAppendText(out, label);
+    stringBuilderAppendText(out, "\n");
+}
+
+text astChildPrefix(text prefix, flag isLast) {
+    if (isLast) {
+        give prefix + "    ";
+    }
+    give prefix + "│   ";
+}
+
+none astPrintExpr(AstArena arena, StringBuilder out, text prefix, flag isLast, num exprNodeId) {
+    num kind = arenaKind(arena, exprNodeId);
+    text childPrefix = astChildPrefix(prefix, isLast);
+
+    if (kind == nodeKindLiteralExpression()) {
+        num litElem = arenaTypeElem(arena, exprNodeId);
+        text valueText = "";
+        if (litElem == primTypeInt()) {
+            valueText = numToText(arenaChild1(arena, exprNodeId));
+        } else if (litElem == primTypeFloat()) {
+            valueText = decToText(arenaLitDec(arena, exprNodeId));
+        } else if (litElem == primTypeBool()) {
+            valueText = "false";
+            if (arenaChild1(arena, exprNodeId) == 1) {
+                valueText = "true";
+            }
+        } else {
+            valueText = arenaText0(arena, exprNodeId);
+        }
+        astLine(out, prefix, isLast, "LiteralExpression " + valueText + " (" + primTypeEnumName(litElem) + ")");
+
+    } else if (kind == nodeKindVariableExpression()) {
+        astLine(out, prefix, isLast, "VariableExpression " + arenaText0(arena, exprNodeId));
+
+    } else if (kind == nodeKindGroupingExpression()) {
+        astLine(out, prefix, isLast, "GroupingExpression");
+        astPrintExpr(arena, out, childPrefix, yes, arenaChild1(arena, exprNodeId));
+
+    } else if (kind == nodeKindUnaryExpression()) {
+        astLine(out, prefix, isLast, "UnaryExpression [" + unaryOpEnumName(arenaOperator(arena, exprNodeId)) + "]");
+        astPrintExpr(arena, out, childPrefix, yes, arenaChild1(arena, exprNodeId));
+
+    } else if (kind == nodeKindBinaryExpression()) {
+        astLine(out, prefix, isLast, "BinaryExpression [" + binaryOpEnumName(arenaOperator(arena, exprNodeId)) + "]");
+        astPrintExpr(arena, out, childPrefix, no, arenaChild1(arena, exprNodeId));
+        astPrintExpr(arena, out, childPrefix, yes, arenaChild2(arena, exprNodeId));
+
+    } else if (kind == nodeKindAssignmentExpression()) {
+        astLine(out, prefix, isLast, "AssignmentExpression " + arenaText0(arena, exprNodeId) + " =");
+        astPrintExpr(arena, out, childPrefix, yes, arenaChild1(arena, exprNodeId));
+
+    } else if (kind == nodeKindFunctionCallExpression()) {
+        num argCount = arenaListCount(arena, exprNodeId);
+        astLine(out, prefix, isLast, "FunctionCallExpression " + arenaText0(arena, exprNodeId) + "(" + numToText(argCount) + " args)");
+        num i = 0;
+        loop (i < argCount) {
+            astPrintExpr(arena, out, childPrefix, i == argCount - 1, arenaListAt(arena, exprNodeId, i));
+            i = i + 1;
+        }
+
+    } else if (kind == nodeKindNewArrayExpression()) {
+        astLine(out, prefix, isLast, "NewArrayExpression " + primTypeEnumName(arenaTypeElem(arena, exprNodeId)) + "[]");
+        astPrintExpr(arena, out, childPrefix, yes, arenaChild1(arena, exprNodeId));
+
+    } else if (kind == nodeKindArrayAccessExpression()) {
+        astLine(out, prefix, isLast, "ArrayAccessExpression");
+        astPrintExpr(arena, out, childPrefix, no, arenaChild1(arena, exprNodeId));
+        astPrintExpr(arena, out, childPrefix, yes, arenaChild2(arena, exprNodeId));
+
+    } else if (kind == nodeKindArrayLengthExpression()) {
+        astLine(out, prefix, isLast, "ArrayLengthExpression");
+        astPrintExpr(arena, out, childPrefix, yes, arenaChild1(arena, exprNodeId));
+
+    } else if (kind == nodeKindIndexAssignmentExpression()) {
+        astLine(out, prefix, isLast, "IndexAssignmentExpression");
+        astPrintExpr(arena, out, childPrefix, no, arenaChild1(arena, exprNodeId));
+        astPrintExpr(arena, out, childPrefix, no, arenaChild2(arena, exprNodeId));
+        astPrintExpr(arena, out, childPrefix, yes, arenaChild3(arena, exprNodeId));
+
+    } else if (kind == nodeKindNewStructExpression()) {
+        num argCount2 = arenaListCount(arena, exprNodeId);
+        astLine(out, prefix, isLast, "NewStructExpression " + arenaText0(arena, exprNodeId) + "(" + numToText(argCount2) + " args)");
+        num j = 0;
+        loop (j < argCount2) {
+            astPrintExpr(arena, out, childPrefix, j == argCount2 - 1, arenaListAt(arena, exprNodeId, j));
+            j = j + 1;
+        }
+
+    } else if (kind == nodeKindFieldAccessExpression()) {
+        astLine(out, prefix, isLast, "FieldAccessExpression ." + arenaText0(arena, exprNodeId));
+        astPrintExpr(arena, out, childPrefix, yes, arenaChild1(arena, exprNodeId));
+
+    } else {
+        // FieldAssignmentExpression
+        astLine(out, prefix, isLast, "FieldAssignmentExpression ." + arenaText0(arena, exprNodeId) + " =");
+        astPrintExpr(arena, out, childPrefix, no, arenaChild1(arena, exprNodeId));
+        astPrintExpr(arena, out, childPrefix, yes, arenaChild2(arena, exprNodeId));
+    }
+}
+
+none astPrintStmt(AstArena arena, StringBuilder out, text prefix, flag isLast, num stmtNodeId) {
+    num kind = arenaKind(arena, stmtNodeId);
+    text childPrefix = astChildPrefix(prefix, isLast);
+
+    if (kind == nodeKindBlockStatement()) {
+        astLine(out, prefix, isLast, "BlockStatement");
+        num n = arenaListCount(arena, stmtNodeId);
+        num i = 0;
+        loop (i < n) {
+            astPrintStmt(arena, out, childPrefix, i == n - 1, arenaListAt(arena, stmtNodeId, i));
+            i = i + 1;
+        }
+
+    } else if (kind == nodeKindVariableDeclaration()) {
+        text typeLabel = typeToStringLabel(arenaTypeElem(arena, stmtNodeId), arenaTypeIsArray(arena, stmtNodeId), arenaTypeStructName(arena, stmtNodeId));
+        astLine(out, prefix, isLast, "VariableDeclaration " + typeLabel + " " + arenaText0(arena, stmtNodeId));
+        num initId = arenaChild1(arena, stmtNodeId);
+        if (initId != -1) {
+            astPrintExpr(arena, out, childPrefix, yes, initId);
+        }
+
+    } else if (kind == nodeKindIfStatement()) {
+        astLine(out, prefix, isLast, "IfStatement");
+        num elseId = arenaChild3(arena, stmtNodeId);
+        flag hasElse = elseId != -1;
+        astLine(out, childPrefix, no, "condition");
+        astPrintExpr(arena, out, astChildPrefix(childPrefix, no), yes, arenaChild1(arena, stmtNodeId));
+        astLine(out, childPrefix, !hasElse, "then");
+        astPrintStmt(arena, out, astChildPrefix(childPrefix, !hasElse), yes, arenaChild2(arena, stmtNodeId));
+        if (hasElse) {
+            astLine(out, childPrefix, yes, "else");
+            astPrintStmt(arena, out, astChildPrefix(childPrefix, yes), yes, elseId);
+        }
+
+    } else if (kind == nodeKindWhileStatement()) {
+        astLine(out, prefix, isLast, "WhileStatement");
+        astLine(out, childPrefix, no, "condition");
+        astPrintExpr(arena, out, astChildPrefix(childPrefix, no), yes, arenaChild1(arena, stmtNodeId));
+        astLine(out, childPrefix, yes, "body");
+        astPrintStmt(arena, out, astChildPrefix(childPrefix, yes), yes, arenaChild2(arena, stmtNodeId));
+
+    } else if (kind == nodeKindReturnStatement()) {
+        astLine(out, prefix, isLast, "ReturnStatement");
+        num valueId = arenaChild1(arena, stmtNodeId);
+        if (valueId != -1) {
+            astPrintExpr(arena, out, childPrefix, yes, valueId);
+        }
+
+    } else if (kind == nodeKindPrintStatement()) {
+        astLine(out, prefix, isLast, "PrintStatement");
+        astPrintExpr(arena, out, childPrefix, yes, arenaChild1(arena, stmtNodeId));
+
+    } else {
+        // ExpressionStatement
+        astLine(out, prefix, isLast, "ExpressionStatement");
+        astPrintExpr(arena, out, childPrefix, yes, arenaChild1(arena, stmtNodeId));
+    }
+}
+
+none astPrintParameter(AstArena arena, StringBuilder out, text prefix, flag isLast, num paramNodeId) {
+    text typeLabel = typeToStringLabel(arenaTypeElem(arena, paramNodeId), arenaTypeIsArray(arena, paramNodeId), arenaTypeStructName(arena, paramNodeId));
+    astLine(out, prefix, isLast, "Parameter " + typeLabel + " " + arenaText0(arena, paramNodeId));
+}
+
+none astPrintFunction(AstArena arena, StringBuilder out, text prefix, flag isLast, num functionNodeId) {
+    text returnLabel = typeToStringLabel(arenaTypeElem(arena, functionNodeId), arenaTypeIsArray(arena, functionNodeId), arenaTypeStructName(arena, functionNodeId));
+    astLine(out, prefix, isLast, "FunctionDeclaration " + arenaText0(arena, functionNodeId) + "() -> " + returnLabel);
+    text childPrefix = astChildPrefix(prefix, isLast);
+    num paramCount = arenaListCount(arena, functionNodeId);
+    num i = 0;
+    loop (i < paramCount) {
+        astPrintParameter(arena, out, childPrefix, no, arenaListAt(arena, functionNodeId, i));
+        i = i + 1;
+    }
+    astPrintStmt(arena, out, childPrefix, yes, arenaChild1(arena, functionNodeId));
+}
+
+none astPrintStruct(AstArena arena, StringBuilder out, text prefix, flag isLast, num structNodeId) {
+    astLine(out, prefix, isLast, "StructDeclaration " + arenaText0(arena, structNodeId));
+    text childPrefix = astChildPrefix(prefix, isLast);
+    num fieldCount = arenaListCount(arena, structNodeId);
+    num i = 0;
+    loop (i < fieldCount) {
+        astPrintParameter(arena, out, childPrefix, i == fieldCount - 1, arenaListAt(arena, structNodeId, i));
+        i = i + 1;
+    }
+}
+
+// Renders program's full AST as an indented Unicode tree, ending in a
+// trailing newline - mirrors AstPrinter.print() exactly, including struct
+// declarations being listed before function declarations (Program's own
+// child order in Java: structs, then functions).
+text astPrintProgram(AstArena arena, num programNodeId) {
+    StringBuilder out = stringBuilderCreate();
+    stringBuilderAppendText(out, "Program\n");
+    num structCount = arenaList2Count(arena, programNodeId);
+    num functionCount = arenaListCount(arena, programNodeId);
+    num totalChildren = structCount + functionCount;
+    num i = 0;
+    loop (i < structCount) {
+        astPrintStruct(arena, out, "", i == totalChildren - 1, arenaList2At(arena, programNodeId, i));
+        i = i + 1;
+    }
+    num j = 0;
+    loop (j < functionCount) {
+        astPrintFunction(arena, out, "", (structCount + j) == totalChildren - 1, arenaListAt(arena, programNodeId, j));
+        j = j + 1;
+    }
+    give stringBuilderBuild(out);
+}

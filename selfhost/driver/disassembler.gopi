@@ -1,0 +1,112 @@
+// disassembler.gopi - Project 2, Phase 7: renders a compiled
+// BytecodeModuleData as human-readable text, for the --disassemble CLI
+// mode. Direct port of BytecodeDisassembler.java's exact section headers,
+// per-entry formatting, and hasOperand() whitelist (which opcodes print
+// their operand at all - PUSH_CONST/LOAD/STORE/CALL/JMP/JMP_IF_FALSE/
+// NEW_STRUCT only, matching Java verbatim; every other opcode's operand is
+// always 0 and never printed, exactly like Java never prints Instruction's
+// unused operand for e.g. ADD/RETURN/HALT).
+
+flag disassemblerHasOperand(num opcode) {
+    give opcode == opcodePushConst() || opcode == opcodeLoad() || opcode == opcodeStore()
+            || opcode == opcodeCall() || opcode == opcodeJmp() || opcode == opcodeJmpIfFalse()
+            || opcode == opcodeNewStruct();
+}
+
+// Mirrors renderConstant(): a STRING constant is quote-wrapped, every other
+// kind uses its own plain text form (matching Java's String.valueOf() for
+// Integer/Double/Boolean).
+text disassembleConstant(ConstantPool pool, num index) {
+    num kind = pool.kinds.items[index];
+    if (kind == primTypeInt()) {
+        give numToText(pool.numValues.items[index]);
+    }
+    if (kind == primTypeFloat()) {
+        give decToText(pool.decValues.items[index]);
+    }
+    if (kind == primTypeBool()) {
+        if (pool.numValues.items[index] == 1) {
+            give "true";
+        }
+        give "false";
+    }
+    give "\"" + pool.textValues.items[index] + "\"";
+}
+
+none disassembleConstantPool(BytecodeModuleData module, StringBuilder out) {
+    stringBuilderAppendText(out, "Constant Pool\n");
+    stringBuilderAppendText(out, "-------------\n");
+    num i = 0;
+    loop (i < module.constants.kinds.count) {
+        stringBuilderAppendText(out, numToText(i));
+        stringBuilderAppendText(out, ": ");
+        stringBuilderAppendText(out, disassembleConstant(module.constants, i));
+        stringBuilderAppendText(out, "\n");
+        i = i + 1;
+    }
+}
+
+none disassembleFunctions(BytecodeModuleData module, StringBuilder out) {
+    stringBuilderAppendText(out, "Functions\n");
+    stringBuilderAppendText(out, "---------\n");
+    num i = 0;
+    loop (i < module.functionNames.count) {
+        stringBuilderAppendText(out, numToText(i));
+        stringBuilderAppendText(out, " ");
+        stringBuilderAppendText(out, module.functionNames.items[i]);
+        stringBuilderAppendText(out, "\n  params:");
+        stringBuilderAppendText(out, numToText(module.functionParamCounts.items[i]));
+        stringBuilderAppendText(out, "\n  slots:");
+        stringBuilderAppendText(out, numToText(module.functionSlotCounts.items[i]));
+        stringBuilderAppendText(out, "\n  codeStart:");
+        stringBuilderAppendText(out, numToText(module.functionCodeStarts.items[i]));
+        stringBuilderAppendText(out, "\n\n");
+        i = i + 1;
+    }
+}
+
+none disassembleStructs(BytecodeModuleData module, StringBuilder out) {
+    stringBuilderAppendText(out, "Structs\n");
+    stringBuilderAppendText(out, "-------\n");
+    num i = 0;
+    loop (i < module.structNames.count) {
+        stringBuilderAppendText(out, numToText(i));
+        stringBuilderAppendText(out, " ");
+        stringBuilderAppendText(out, module.structNames.items[i]);
+        stringBuilderAppendText(out, "\n  fields:");
+        stringBuilderAppendText(out, numToText(module.structFieldCounts.items[i]));
+        stringBuilderAppendText(out, "\n\n");
+        i = i + 1;
+    }
+}
+
+none disassembleInstructions(BytecodeModuleData module, StringBuilder out) {
+    stringBuilderAppendText(out, "Instructions\n");
+    stringBuilderAppendText(out, "------------\n");
+    num i = 0;
+    loop (i < module.opcodes.count) {
+        stringBuilderAppendText(out, zeroPad4(i));
+        stringBuilderAppendText(out, " ");
+        stringBuilderAppendText(out, opcodeName(module.opcodes.items[i]));
+        if (disassemblerHasOperand(module.opcodes.items[i])) {
+            stringBuilderAppendText(out, " ");
+            stringBuilderAppendText(out, numToText(module.operands.items[i]));
+        }
+        stringBuilderAppendText(out, "\n");
+        i = i + 1;
+    }
+}
+
+// Renders module's constant pool, function table, struct table, and
+// instruction listing - mirrors BytecodeDisassembler.disassemble() exactly.
+text disassembleModule(BytecodeModuleData module) {
+    StringBuilder out = stringBuilderCreate();
+    disassembleConstantPool(module, out);
+    stringBuilderAppendText(out, "\n");
+    disassembleFunctions(module, out);
+    stringBuilderAppendText(out, "\n");
+    disassembleStructs(module, out);
+    stringBuilderAppendText(out, "\n");
+    disassembleInstructions(module, out);
+    give stringBuilderBuild(out);
+}

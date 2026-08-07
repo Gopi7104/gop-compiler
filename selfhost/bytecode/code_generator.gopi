@@ -1,0 +1,480 @@
+// code_generator.gopi - Project 4, Phase 5: the self-hosted Code Generator.
+// A structural mirror of CodeGenerator.java, translated into GopiLang's
+// data-oriented shape exactly the way semantic_analyzer.gopi translated
+// SemanticAnalyzer.java:
+//   - BytecodeState carries every builder accumulator CodeGenerator.java's
+//     instance fields hold (constantPool/functions/structs/instructions/
+//     slots/functionIndices/structIndices), passed explicitly to every
+//     function instead of an implicit `this`.
+//   - A VariableSymbol's slot lookup (Java's `Map<VariableSymbol,Integer>
+//     slots`, keyed by VALUE equality - see the header note below) becomes
+//     one more arena-node-indexed column (slotByNode), reset (refilled with
+//     -1) once per function exactly where Java's `slots.clear()` resets the
+//     whole map. A FunctionSymbol's call index similarly becomes
+//     functionCallIndexByNode, indexed by the declaring FunctionDeclaration
+//     arena node id.
+//   - Never re-validates anything SemanticTables already resolved - a
+//     missing resolution here would mean an earlier phase failed to catch
+//     something, which cannot happen for a program the self-hosted Semantic
+//     Analyzer accepted with zero diagnostics (the only kind of program the
+//     self-hosted Driver, Phase 7, ever hands to this phase - matching
+//     GopiC.java's own compileToBytecode(), which never calls CodeGenerator
+//     after an earlier phase reported an error). GopiLang has no exception
+//     to raise for the "this should be unreachable" case Java signals with
+//     IllegalStateException, so those specific defensive checks have no
+//     self-hosted equivalent; nothing about that changes this phase's
+//     observable behavior on any program it is ever actually asked to
+//     compile.
+//
+// A note on `slots`' Java-side subtlety, since it shapes why this port
+// needs no separate "symbol" concept at all: CodeGenerator.java's
+// `Map<VariableSymbol, Integer> slots` is a PLAIN HashMap, keyed by
+// VariableSymbol's ordinary record equality (name, type, range) - NOT
+// identity, unlike SemanticAnalyzer's own identity-keyed
+// Set<VariableSymbol>. `assignLocalSlots()`/the VariableDeclaration case of
+// `compileStatement()` insert under a FRESH `new VariableSymbol(decl.name(),
+// decl.type(), decl.range())` reconstructed from the declaring node's own
+// fields (never reading SemanticModel's resolution maps); `compileExpr()`'s
+// VariableExpression/AssignmentExpression cases look the slot up via the
+// ORIGINAL VariableSymbol from `variableResolutions()`/
+// `assignmentTargetResolutions()` instead - a DIFFERENT object, but EQUAL by
+// value (same name/type/range, since both ultimately came from the same
+// declaring AST node), so the HashMap lookup still succeeds. This project's
+// own port already collapsed that entire indirection in Phase 4 - a
+// VariableSymbol's identity IS the declaring VariableDeclaration/Parameter
+// arena node id - so `slotByNode`, indexed directly by that same id, needs
+// no reconstruction trick at all: slot assignment writes
+// `slotByNode.items[declaringNodeId]`, and lookup reads
+// `slotByNode.items[state.tables.resolvedDeclByNode.items[exprNodeId]]` -
+// the arena node id already IS the same key on both sides.
+
+// ---------------------------------------------------------------------
+// BytecodeState / BytecodeModuleData
+// ---------------------------------------------------------------------
+
+struct BytecodeState {
+    AstArena arena;
+    SemanticTables tables;
+    num programNodeId;
+    ConstantPool constants;
+    VectorText functionNames;
+    VectorNum functionParamCounts;
+    VectorNum functionSlotCounts;
+    VectorNum functionCodeStarts;
+    VectorText structNames;
+    VectorNum structFieldCounts;
+    VectorNum opcodes;
+    VectorNum operands;
+    VectorNum functionCallIndexByNode; // declaring FunctionDeclaration node id -> 0-based CALL index
+    VectorNum slotByNode;              // declaring VariableDeclaration/Parameter node id -> local slot, reset per function
+}
+
+// The complete compiled program - the self-hosted equivalent of
+// BytecodeModule, with the same four-part shape (constant pool, function
+// metadata, struct metadata, one flat instruction stream).
+struct BytecodeModuleData {
+    ConstantPool constants;
+    VectorText functionNames;
+    VectorNum functionParamCounts;
+    VectorNum functionSlotCounts;
+    VectorNum functionCodeStarts;
+    VectorText structNames;
+    VectorNum structFieldCounts;
+    VectorNum opcodes;
+    VectorNum operands;
+}
+
+num emitInstr(BytecodeState state, num opcode, num operand) {
+    num index = state.opcodes.count;
+    vectorNumPush(state.opcodes, opcode);
+    vectorNumPush(state.operands, operand);
+    give index;
+}
+
+none patchOperand(BytecodeState state, num instructionIndex, num operand) {
+    state.operands.items[instructionIndex] = operand;
+}
+
+num instrCount(BytecodeState state) {
+    give state.opcodes.count;
+}
+
+// A struct's declaration-order field position, resolved entirely at
+// code-generation time from the struct's own arena field list - mirrors
+// fieldIndex(StructSymbol,String) exactly (no runtime field metadata, no
+// lookup table; ARRAY_GET/ARRAY_SET address a struct's Object[] purely by
+// integer index).
+num fieldIndexInStruct(AstArena arena, num structDeclNodeId, text fieldName) {
+    num fieldCount = arenaListCount(arena, structDeclNodeId);
+    num i = 0;
+    num found = -1;
+    loop (i < fieldCount && found == -1) {
+        num fieldNodeId = arenaListAt(arena, structDeclNodeId, i);
+        if (arenaText0(arena, fieldNodeId) == fieldName) {
+            found = i;
+        }
+        i = i + 1;
+    }
+    give found;
+}
+
+// The opcode for a non-short-circuit BinaryExpression - mirrors the switch
+// in compileExpr's plain `case BinaryExpression binary ->` arm exactly,
+// including ADD's own ADD-vs-CONCAT dispatch on the BINARY EXPRESSION's OWN
+// computed type (already recorded by Phase 4 in typeElemByNode), not either
+// operand's type.
+num binaryOpcodeFor(BytecodeState state, num exprNodeId, num op) {
+    if (op == binaryOpAdd()) {
+        if (state.tables.typeElemByNode.items[exprNodeId] == primTypeString()) {
+            give opcodeConcat();
+        }
+        give opcodeAdd();
+    }
+    if (op == binaryOpSubtract()) { give opcodeSub(); }
+    if (op == binaryOpMultiply()) { give opcodeMul(); }
+    if (op == binaryOpDivide()) { give opcodeDiv(); }
+    if (op == binaryOpModulo()) { give opcodeMod(); }
+    if (op == binaryOpEqual()) { give opcodeCmpEq(); }
+    if (op == binaryOpNotEqual()) { give opcodeCmpNe(); }
+    if (op == binaryOpLess()) { give opcodeCmpLt(); }
+    if (op == binaryOpGreater()) { give opcodeCmpGt(); }
+    if (op == binaryOpLessEqual()) { give opcodeCmpLe(); }
+    give opcodeCmpGe(); // GREATER_EQUAL
+}
+
+// ---------------------------------------------------------------------
+// compileExpr - direct port of compileExpr(Expr)'s switch.
+// ---------------------------------------------------------------------
+
+none compileExpr(BytecodeState state, num exprNodeId) {
+    num kind = arenaKind(state.arena, exprNodeId);
+
+    if (kind == nodeKindLiteralExpression()) {
+        num index = constantIndexForLiteralNode(state.arena, state.constants, exprNodeId);
+        emitInstr(state, opcodePushConst(), index);
+
+    } else if (kind == nodeKindGroupingExpression()) {
+        compileExpr(state, arenaChild1(state.arena, exprNodeId));
+
+    } else if (kind == nodeKindVariableExpression()) {
+        num declNodeId = state.tables.resolvedDeclByNode.items[exprNodeId];
+        num slot = state.slotByNode.items[declNodeId];
+        emitInstr(state, opcodeLoad(), slot);
+
+    } else if (kind == nodeKindUnaryExpression()) {
+        compileExpr(state, arenaChild1(state.arena, exprNodeId));
+        num op = arenaOperator(state.arena, exprNodeId);
+        num opcode = opcodeNeg();
+        if (op == unaryOpNot()) {
+            opcode = opcodeNot();
+        }
+        emitInstr(state, opcode, 0);
+
+    } else if (kind == nodeKindBinaryExpression() && arenaOperator(state.arena, exprNodeId) == binaryOpAnd()) {
+        // left && right, using only JMP_IF_FALSE/JMP (no JMP_IF_TRUE exists):
+        //   compile(left); JMP_IF_FALSE -> FALSE; compile(right); JMP -> END;
+        //   FALSE: PUSH_CONST no; END:
+        compileExpr(state, arenaChild1(state.arena, exprNodeId));
+        num jmpFalseIndex = emitInstr(state, opcodeJmpIfFalse(), -1);
+        compileExpr(state, arenaChild2(state.arena, exprNodeId));
+        num jmpEndIndex = emitInstr(state, opcodeJmp(), -1);
+        patchOperand(state, jmpFalseIndex, instrCount(state));
+        emitInstr(state, opcodePushConst(), constantIndexBool(state.constants, 0));
+        patchOperand(state, jmpEndIndex, instrCount(state));
+
+    } else if (kind == nodeKindBinaryExpression() && arenaOperator(state.arena, exprNodeId) == binaryOpOr()) {
+        // left || right: mirror image of AND above.
+        compileExpr(state, arenaChild1(state.arena, exprNodeId));
+        num jmpFalseIndex2 = emitInstr(state, opcodeJmpIfFalse(), -1);
+        emitInstr(state, opcodePushConst(), constantIndexBool(state.constants, 1));
+        num jmpEndIndex2 = emitInstr(state, opcodeJmp(), -1);
+        patchOperand(state, jmpFalseIndex2, instrCount(state));
+        compileExpr(state, arenaChild2(state.arena, exprNodeId));
+        patchOperand(state, jmpEndIndex2, instrCount(state));
+
+    } else if (kind == nodeKindBinaryExpression()) {
+        compileExpr(state, arenaChild1(state.arena, exprNodeId));
+        compileExpr(state, arenaChild2(state.arena, exprNodeId));
+        num op = arenaOperator(state.arena, exprNodeId);
+        emitInstr(state, binaryOpcodeFor(state, exprNodeId, op), 0);
+
+    } else if (kind == nodeKindAssignmentExpression()) {
+        compileExpr(state, arenaChild1(state.arena, exprNodeId));
+        emitInstr(state, opcodeDup(), 0);
+        num declNodeId = state.tables.resolvedDeclByNode.items[exprNodeId];
+        num slot = state.slotByNode.items[declNodeId];
+        emitInstr(state, opcodeStore(), slot);
+
+    } else if (kind == nodeKindFunctionCallExpression()) {
+        num argCount = arenaListCount(state.arena, exprNodeId);
+        num i = 0;
+        loop (i < argCount) {
+            compileExpr(state, arenaListAt(state.arena, exprNodeId, i));
+            i = i + 1;
+        }
+        text calleeName = arenaText0(state.arena, exprNodeId);
+        num builtinOp = builtinOpcodeForName(calleeName);
+        if (builtinOp != -1) {
+            emitInstr(state, builtinOp, 0);
+        } else {
+            num functionRow = state.tables.resolvedFunctionByNode.items[exprNodeId];
+            num declNodeId = state.tables.functions.declNodeIds.items[functionRow];
+            num callIndex = state.functionCallIndexByNode.items[declNodeId];
+            emitInstr(state, opcodeCall(), callIndex);
+        }
+
+    } else if (kind == nodeKindNewArrayExpression()) {
+        compileExpr(state, arenaChild1(state.arena, exprNodeId));
+        emitInstr(state, opcodeNewArray(), 0);
+
+    } else if (kind == nodeKindArrayAccessExpression()) {
+        compileExpr(state, arenaChild1(state.arena, exprNodeId));
+        compileExpr(state, arenaChild2(state.arena, exprNodeId));
+        emitInstr(state, opcodeArrayGet(), 0);
+
+    } else if (kind == nodeKindArrayLengthExpression()) {
+        compileExpr(state, arenaChild1(state.arena, exprNodeId));
+        emitInstr(state, opcodeArrayLength(), 0);
+
+    } else if (kind == nodeKindIndexAssignmentExpression()) {
+        compileExpr(state, arenaChild1(state.arena, exprNodeId));
+        compileExpr(state, arenaChild2(state.arena, exprNodeId));
+        compileExpr(state, arenaChild3(state.arena, exprNodeId));
+        // ARRAY_SET pushes the stored value back itself (unlike plain
+        // STORE), so no DUP is needed here.
+        emitInstr(state, opcodeArraySet(), 0);
+
+    } else if (kind == nodeKindNewStructExpression()) {
+        num argCount2 = arenaListCount(state.arena, exprNodeId);
+        num j = 0;
+        loop (j < argCount2) {
+            compileExpr(state, arenaListAt(state.arena, exprNodeId, j));
+            j = j + 1;
+        }
+        text structName = arenaText0(state.arena, exprNodeId);
+        num structRow = structTableLookupRow(state.tables.structs, structName);
+        emitInstr(state, opcodeNewStruct(), structRow);
+
+    } else if (kind == nodeKindFieldAccessExpression()) {
+        num targetNodeId = arenaChild1(state.arena, exprNodeId);
+        compileExpr(state, targetNodeId);
+        // Derived from SemanticTables exactly as NewStructExpression's own
+        // struct lookup above: the target's own recorded type carries the
+        // struct name.
+        text targetStructName = state.tables.typeStructNameByNode.items[targetNodeId];
+        num structRow = structTableLookupRow(state.tables.structs, targetStructName);
+        num structDeclNodeId = state.tables.structs.declNodeIds.items[structRow];
+        num fieldIdx = fieldIndexInStruct(state.arena, structDeclNodeId, arenaText0(state.arena, exprNodeId));
+        emitInstr(state, opcodePushConst(), constantIndexInt(state.constants, fieldIdx));
+        emitInstr(state, opcodeArrayGet(), 0);
+
+    } else {
+        // FieldAssignmentExpression
+        num targetNodeId2 = arenaChild1(state.arena, exprNodeId);
+        compileExpr(state, targetNodeId2);
+        text targetStructName2 = state.tables.typeStructNameByNode.items[targetNodeId2];
+        num structRow2 = structTableLookupRow(state.tables.structs, targetStructName2);
+        num structDeclNodeId2 = state.tables.structs.declNodeIds.items[structRow2];
+        num fieldIdx2 = fieldIndexInStruct(state.arena, structDeclNodeId2, arenaText0(state.arena, exprNodeId));
+        emitInstr(state, opcodePushConst(), constantIndexInt(state.constants, fieldIdx2));
+        compileExpr(state, arenaChild2(state.arena, exprNodeId));
+        // ARRAY_SET pushes the stored value back itself, exactly as
+        // IndexAssignmentExpression above relies on for chaining.
+        emitInstr(state, opcodeArraySet(), 0);
+    }
+}
+
+// ---------------------------------------------------------------------
+// compileStatement - direct port of compileStatement(Stmt)'s switch.
+// ---------------------------------------------------------------------
+
+none compileStatement(BytecodeState state, num stmtNodeId) {
+    num kind = arenaKind(state.arena, stmtNodeId);
+
+    if (kind == nodeKindBlockStatement()) {
+        num n = arenaListCount(state.arena, stmtNodeId);
+        num i = 0;
+        loop (i < n) {
+            compileStatement(state, arenaListAt(state.arena, stmtNodeId, i));
+            i = i + 1;
+        }
+
+    } else if (kind == nodeKindVariableDeclaration()) {
+        num initNodeId = arenaChild1(state.arena, stmtNodeId);
+        if (initNodeId != -1) {
+            compileExpr(state, initNodeId);
+            num slot = state.slotByNode.items[stmtNodeId];
+            emitInstr(state, opcodeStore(), slot);
+        }
+
+    } else if (kind == nodeKindPrintStatement()) {
+        compileExpr(state, arenaChild1(state.arena, stmtNodeId));
+        emitInstr(state, opcodePrint(), 0);
+
+    } else if (kind == nodeKindExpressionStatement()) {
+        num exprNodeId = arenaChild1(state.arena, stmtNodeId);
+        compileExpr(state, exprNodeId);
+        num typeElem = state.tables.typeElemByNode.items[exprNodeId];
+        if (typeElem != primTypeVoid()) {
+            emitInstr(state, opcodePop(), 0);
+        }
+
+    } else if (kind == nodeKindReturnStatement()) {
+        num valueNodeId = arenaChild1(state.arena, stmtNodeId);
+        if (valueNodeId != -1) {
+            compileExpr(state, valueNodeId);
+        }
+        emitInstr(state, opcodeReturn(), 0);
+
+    } else if (kind == nodeKindIfStatement()) {
+        compileExpr(state, arenaChild1(state.arena, stmtNodeId));
+        num jmpIfFalseIndex = emitInstr(state, opcodeJmpIfFalse(), -1);
+
+        compileStatement(state, arenaChild2(state.arena, stmtNodeId));
+
+        num elseNodeId = arenaChild3(state.arena, stmtNodeId);
+        if (elseNodeId != -1) {
+            num jmpEndIndex = emitInstr(state, opcodeJmp(), -1);
+            patchOperand(state, jmpIfFalseIndex, instrCount(state));
+            compileStatement(state, elseNodeId);
+            patchOperand(state, jmpEndIndex, instrCount(state));
+        } else {
+            patchOperand(state, jmpIfFalseIndex, instrCount(state));
+        }
+
+    } else {
+        // WhileStatement
+        num loopStart = instrCount(state);
+        compileExpr(state, arenaChild1(state.arena, stmtNodeId));
+
+        num jmpIfFalseIndex2 = emitInstr(state, opcodeJmpIfFalse(), -1);
+        compileStatement(state, arenaChild2(state.arena, stmtNodeId));
+        emitInstr(state, opcodeJmp(), loopStart);
+
+        patchOperand(state, jmpIfFalseIndex2, instrCount(state));
+    }
+}
+
+// ---------------------------------------------------------------------
+// Slot allocation - direct port of assignLocalSlots(Stmt,int).
+// ---------------------------------------------------------------------
+
+num assignLocalSlots(BytecodeState state, num stmtNodeId, num nextSlot) {
+    num kind = arenaKind(state.arena, stmtNodeId);
+
+    if (kind == nodeKindBlockStatement()) {
+        num n = arenaListCount(state.arena, stmtNodeId);
+        num i = 0;
+        loop (i < n) {
+            nextSlot = assignLocalSlots(state, arenaListAt(state.arena, stmtNodeId, i), nextSlot);
+            i = i + 1;
+        }
+        give nextSlot;
+    }
+
+    if (kind == nodeKindVariableDeclaration()) {
+        state.slotByNode.items[stmtNodeId] = nextSlot;
+        give nextSlot + 1;
+    }
+
+    if (kind == nodeKindIfStatement()) {
+        nextSlot = assignLocalSlots(state, arenaChild2(state.arena, stmtNodeId), nextSlot);
+        num elseNodeId = arenaChild3(state.arena, stmtNodeId);
+        if (elseNodeId != -1) {
+            nextSlot = assignLocalSlots(state, elseNodeId, nextSlot);
+        }
+        give nextSlot;
+    }
+
+    if (kind == nodeKindWhileStatement()) {
+        give assignLocalSlots(state, arenaChild2(state.arena, stmtNodeId), nextSlot);
+    }
+
+    // PrintStatement, ExpressionStatement, ReturnStatement: no-op.
+    give nextSlot;
+}
+
+// ---------------------------------------------------------------------
+// compileFunction - direct port of compileFunction(FunctionDeclaration).
+// ---------------------------------------------------------------------
+
+none compileFunction(BytecodeState state, num functionNodeId) {
+    // slots.clear(), reset for every function.
+    state.slotByNode = filledVectorNum(arenaNodeCount(state.arena), -1);
+
+    num nextSlot = 0;
+    num paramCount = arenaListCount(state.arena, functionNodeId);
+    num i = 0;
+    loop (i < paramCount) {
+        num paramNodeId = arenaListAt(state.arena, functionNodeId, i);
+        state.slotByNode.items[paramNodeId] = nextSlot;
+        nextSlot = nextSlot + 1;
+        i = i + 1;
+    }
+
+    num bodyNodeId = arenaChild1(state.arena, functionNodeId);
+    nextSlot = assignLocalSlots(state, bodyNodeId, nextSlot);
+
+    num codeStart = instrCount(state);
+    compileStatement(state, bodyNodeId);
+    emitInstr(state, opcodeReturn(), 0);
+
+    vectorTextPush(state.functionNames, arenaText0(state.arena, functionNodeId));
+    vectorNumPush(state.functionParamCounts, paramCount);
+    vectorNumPush(state.functionSlotCounts, nextSlot);
+    vectorNumPush(state.functionCodeStarts, codeStart);
+}
+
+// ---------------------------------------------------------------------
+// generate - direct port of generate(): assign every function a stable
+// (0-based, program.functions() order, builtins excluded) call index,
+// assign every struct a stable index (program.structs() order - already
+// exactly what StructTable's own row numbers are, since struct
+// registration never has a builtin-offset the way function registration
+// does), emit the CALL main; HALT entry stub, compile every function.
+// ---------------------------------------------------------------------
+
+BytecodeModuleData generate(AstArena arena, num programNodeId, SemanticTables tables) {
+    num n = arenaNodeCount(arena);
+    BytecodeState state = new BytecodeState(
+            arena, tables, programNodeId,
+            constantPoolCreate(),
+            vectorTextCreate(), vectorNumCreate(), vectorNumCreate(), vectorNumCreate(),
+            vectorTextCreate(), vectorNumCreate(),
+            vectorNumCreate(), vectorNumCreate(),
+            filledVectorNum(n, -1),
+            filledVectorNum(n, -1));
+
+    num functionCount = arenaListCount(arena, programNodeId);
+    num i = 0;
+    loop (i < functionCount) {
+        num functionNodeId = arenaListAt(arena, programNodeId, i);
+        state.functionCallIndexByNode.items[functionNodeId] = i;
+        i = i + 1;
+    }
+
+    num structCount = arenaList2Count(arena, programNodeId);
+    num j = 0;
+    loop (j < structCount) {
+        num structNodeId = arenaList2At(arena, programNodeId, j);
+        vectorTextPush(state.structNames, arenaText0(arena, structNodeId));
+        vectorNumPush(state.structFieldCounts, arenaListCount(arena, structNodeId));
+        j = j + 1;
+    }
+
+    num mainRow = functionTableLookupRow(tables.functions, "main");
+    num mainDeclNodeId = tables.functions.declNodeIds.items[mainRow];
+    num mainCallIndex = state.functionCallIndexByNode.items[mainDeclNodeId];
+    emitInstr(state, opcodeCall(), mainCallIndex);
+    emitInstr(state, opcodeHalt(), 0);
+
+    num k = 0;
+    loop (k < functionCount) {
+        compileFunction(state, arenaListAt(arena, programNodeId, k));
+        k = k + 1;
+    }
+
+    give new BytecodeModuleData(state.constants, state.functionNames, state.functionParamCounts,
+            state.functionSlotCounts, state.functionCodeStarts, state.structNames, state.structFieldCounts,
+            state.opcodes, state.operands);
+}

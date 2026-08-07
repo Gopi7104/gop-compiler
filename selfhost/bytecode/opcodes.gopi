@@ -1,0 +1,218 @@
+// opcodes.gopi - Project 4, Phase 5: opcode constants and the constant pool.
+//
+// Opcode.java's 30-entry enum, translated the way every prior phase's Java
+// enum was: plain zero-argument functions standing in for an enum, numbered
+// in Opcode.java's own declared order (purely for cross-referencing
+// convenience - as with tokenKindXxx()/nodeKindXxx(), the numbering has no
+// functional significance beyond being stable and unique within this
+// program). Differential comparison against Java never compares these
+// numbers directly - see code_generator.gopi's dump helper, which compares
+// opcode NAMES (text) instead, so this file's own numbering choice can
+// never cause a false mismatch.
+
+num opcodePushConst() { give 0; }
+num opcodeLoad() { give 1; }
+num opcodeStore() { give 2; }
+num opcodeAdd() { give 3; }
+num opcodeSub() { give 4; }
+num opcodeMul() { give 5; }
+num opcodeDiv() { give 6; }
+num opcodeMod() { give 7; }
+num opcodeConcat() { give 8; }
+num opcodeNeg() { give 9; }
+num opcodeNot() { give 10; }
+num opcodeCmpEq() { give 11; }
+num opcodeCmpNe() { give 12; }
+num opcodeCmpLt() { give 13; }
+num opcodeCmpGt() { give 14; }
+num opcodeCmpLe() { give 15; }
+num opcodeCmpGe() { give 16; }
+num opcodeJmp() { give 17; }
+num opcodeJmpIfFalse() { give 18; }
+num opcodeCall() { give 19; }
+num opcodeReturn() { give 20; }
+num opcodeNewArray() { give 21; }
+num opcodeArrayGet() { give 22; }
+num opcodeArraySet() { give 23; }
+num opcodeArrayLength() { give 24; }
+num opcodeNewStruct() { give 25; }
+num opcodeCharCodeAt() { give 26; }
+num opcodeTextLength() { give 27; }
+num opcodeTextFromCharCode() { give 28; }
+num opcodeReadFile() { give 29; }
+num opcodeArgCount() { give 30; }
+num opcodeArgAt() { give 31; }
+num opcodePrint() { give 32; }
+num opcodeDup() { give 33; }
+num opcodePop() { give 34; }
+num opcodeHalt() { give 35; }
+
+// The exact Opcode enum name (matches Java's Opcode.XXX.name() verbatim) -
+// used only by the differential test's dump, so the two sides never need to
+// agree on numbering, only on this text.
+text opcodeName(num code) {
+    if (code == opcodePushConst()) { give "PUSH_CONST"; }
+    if (code == opcodeLoad()) { give "LOAD"; }
+    if (code == opcodeStore()) { give "STORE"; }
+    if (code == opcodeAdd()) { give "ADD"; }
+    if (code == opcodeSub()) { give "SUB"; }
+    if (code == opcodeMul()) { give "MUL"; }
+    if (code == opcodeDiv()) { give "DIV"; }
+    if (code == opcodeMod()) { give "MOD"; }
+    if (code == opcodeConcat()) { give "CONCAT"; }
+    if (code == opcodeNeg()) { give "NEG"; }
+    if (code == opcodeNot()) { give "NOT"; }
+    if (code == opcodeCmpEq()) { give "CMP_EQ"; }
+    if (code == opcodeCmpNe()) { give "CMP_NE"; }
+    if (code == opcodeCmpLt()) { give "CMP_LT"; }
+    if (code == opcodeCmpGt()) { give "CMP_GT"; }
+    if (code == opcodeCmpLe()) { give "CMP_LE"; }
+    if (code == opcodeCmpGe()) { give "CMP_GE"; }
+    if (code == opcodeJmp()) { give "JMP"; }
+    if (code == opcodeJmpIfFalse()) { give "JMP_IF_FALSE"; }
+    if (code == opcodeCall()) { give "CALL"; }
+    if (code == opcodeReturn()) { give "RETURN"; }
+    if (code == opcodeNewArray()) { give "NEW_ARRAY"; }
+    if (code == opcodeArrayGet()) { give "ARRAY_GET"; }
+    if (code == opcodeArraySet()) { give "ARRAY_SET"; }
+    if (code == opcodeArrayLength()) { give "ARRAY_LENGTH"; }
+    if (code == opcodeNewStruct()) { give "NEW_STRUCT"; }
+    if (code == opcodeCharCodeAt()) { give "CHAR_CODE_AT"; }
+    if (code == opcodeTextLength()) { give "TEXT_LENGTH"; }
+    if (code == opcodeTextFromCharCode()) { give "TEXT_FROM_CHAR_CODE"; }
+    if (code == opcodeReadFile()) { give "READ_FILE"; }
+    if (code == opcodeArgCount()) { give "ARG_COUNT"; }
+    if (code == opcodeArgAt()) { give "ARG_AT"; }
+    if (code == opcodePrint()) { give "PRINT"; }
+    if (code == opcodeDup()) { give "DUP"; }
+    if (code == opcodePop()) { give "POP"; }
+    give "HALT";
+}
+
+// Milestone B1's one place a builtin's name maps to its dedicated opcode -
+// mirrors CodeGenerator.BUILTIN_OPCODES exactly. Gives -1 for any name that
+// is not one of the six builtins (the ordinary CALL path handles those).
+num builtinOpcodeForName(text name) {
+    if (name == "charCodeAt") { give opcodeCharCodeAt(); }
+    if (name == "textLength") { give opcodeTextLength(); }
+    if (name == "textFromCharCode") { give opcodeTextFromCharCode(); }
+    if (name == "readFile") { give opcodeReadFile(); }
+    if (name == "argCount") { give opcodeArgCount(); }
+    if (name == "argAt") { give opcodeArgAt(); }
+    give -1;
+}
+
+// ---------------------------------------------------------------------
+// ConstantPool - a deduplicated pool of literal values, exactly mirroring
+// CodeGenerator's constantPool/constantIndices fields. Java's List<Object>
+// holds four distinct boxed types (Integer/Double/Boolean/String) and
+// dedupes by value equality via a plain HashMap<Object,Integer> - since
+// GopiLang has no polymorphic container, this becomes one row per constant
+// across four parallel columns (kind + one value column per primitive
+// kind), the same "kind tag selects which column is meaningful" idiom
+// AstArena's own LiteralExpression columns already use. Lookup is a linear
+// scan (kind AND the one relevant value column must both match) rather
+// than a hash lookup - deliberately: GopiLang has no way to stringify a dec
+// value for use as a HashMapTextToNum key without risking precision loss,
+// and a compile-time constant pool is small (dozens to low hundreds of
+// entries even for a large program), so an O(n) scan here costs nothing
+// that matters, exactly the same tradeoff resolveField()/fieldIndexInStruct
+// already make for "small, scanned once per call site" data.
+// ---------------------------------------------------------------------
+
+struct ConstantPool {
+    VectorNum kinds;
+    VectorNum numValues;   // meaningful for INT (the value itself) and BOOL (0/1)
+    VectorDec decValues;   // meaningful for FLOAT
+    VectorText textValues; // meaningful for STRING
+}
+
+ConstantPool constantPoolCreate() {
+    give new ConstantPool(vectorNumCreate(), vectorNumCreate(), vectorDecCreate(), vectorTextCreate());
+}
+
+num constantPoolAppend(ConstantPool pool, num kind, num numValue, dec decValue, text textValue) {
+    num index = pool.kinds.count;
+    vectorNumPush(pool.kinds, kind);
+    vectorNumPush(pool.numValues, numValue);
+    vectorDecPush(pool.decValues, decValue);
+    vectorTextPush(pool.textValues, textValue);
+    give index;
+}
+
+num constantIndexInt(ConstantPool pool, num value) {
+    num i = 0;
+    num found = -1;
+    loop (i < pool.kinds.count && found == -1) {
+        if (pool.kinds.items[i] == primTypeInt() && pool.numValues.items[i] == value) {
+            found = i;
+        }
+        i = i + 1;
+    }
+    if (found != -1) {
+        give found;
+    }
+    give constantPoolAppend(pool, primTypeInt(), value, 0.0, "");
+}
+
+num constantIndexFloat(ConstantPool pool, dec value) {
+    num i = 0;
+    num found = -1;
+    loop (i < pool.kinds.count && found == -1) {
+        if (pool.kinds.items[i] == primTypeFloat() && pool.decValues.items[i] == value) {
+            found = i;
+        }
+        i = i + 1;
+    }
+    if (found != -1) {
+        give found;
+    }
+    give constantPoolAppend(pool, primTypeFloat(), 0, value, "");
+}
+
+num constantIndexBool(ConstantPool pool, num value) {
+    num i = 0;
+    num found = -1;
+    loop (i < pool.kinds.count && found == -1) {
+        if (pool.kinds.items[i] == primTypeBool() && pool.numValues.items[i] == value) {
+            found = i;
+        }
+        i = i + 1;
+    }
+    if (found != -1) {
+        give found;
+    }
+    give constantPoolAppend(pool, primTypeBool(), value, 0.0, "");
+}
+
+num constantIndexString(ConstantPool pool, text value) {
+    num i = 0;
+    num found = -1;
+    loop (i < pool.kinds.count && found == -1) {
+        if (pool.kinds.items[i] == primTypeString() && pool.textValues.items[i] == value) {
+            found = i;
+        }
+        i = i + 1;
+    }
+    if (found != -1) {
+        give found;
+    }
+    give constantPoolAppend(pool, primTypeString(), 0, 0.0, value);
+}
+
+// A LiteralExpression arena node already carries its own value in exactly
+// the column its typeElem selects (see ast_arena.gopi's column-reuse
+// table) - this just routes to the matching constantIndexXxx().
+num constantIndexForLiteralNode(AstArena arena, ConstantPool pool, num literalNodeId) {
+    num litType = arenaTypeElem(arena, literalNodeId);
+    if (litType == primTypeInt()) {
+        give constantIndexInt(pool, arenaChild1(arena, literalNodeId));
+    }
+    if (litType == primTypeFloat()) {
+        give constantIndexFloat(pool, arenaLitDec(arena, literalNodeId));
+    }
+    if (litType == primTypeBool()) {
+        give constantIndexBool(pool, arenaChild1(arena, literalNodeId));
+    }
+    give constantIndexString(pool, arenaText0(arena, literalNodeId));
+}

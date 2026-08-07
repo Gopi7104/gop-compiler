@@ -1,0 +1,260 @@
+// text_format.gopi - Project 2, Phase 7: text-formatting helpers the
+// Compiler Driver needs to render tokens/AST/bytecode the way GopiC.java's
+// three inspection modes do (Java's default `Object.toString()`/enum
+// `toString()`/`Double.toString()` behavior, not the `displayName()`
+// spelling used in diagnostics).
+//
+// decToText is the one deliberate, documented approximation in this file:
+// GopiLang has no dec->num narrowing at the language level (TypeRules only
+// ever widens num->dec, never the reverse - by design, see TypeRules.java),
+// so there is no way to ask "what integer is this dec, so I can extract its
+// digits with numToText" directly. Every digit is instead found via a
+// bounded 10-way comparison chain (decDigitAt) - never a loop bounded by
+// the VALUE's own magnitude, only by digit COUNT, so this stays fast
+// regardless of how large or small the value is. Precision is capped at 12
+// significant fractional digits (trimmed of trailing zeros, keeping at
+// least one) rather than reproducing Double.toString()'s exact
+// shortest-round-trip algorithm - a deliberate simplification in the same
+// spirit as DiagnosticBuffer.render() already being "a close, readable
+// approximation" of Java's diagnostic rendering rather than a byte-perfect
+// port: every literal value GopiLang's own lexer can produce is a short,
+// ordinary decimal (no exponents, no exotic precision), so this covers
+// every value these three CLI modes actually ever need to render.
+
+num decDigitAt(dec d) {
+    if (d < 1.0) { give 0; }
+    if (d < 2.0) { give 1; }
+    if (d < 3.0) { give 2; }
+    if (d < 4.0) { give 3; }
+    if (d < 5.0) { give 4; }
+    if (d < 6.0) { give 5; }
+    if (d < 7.0) { give 6; }
+    if (d < 8.0) { give 7; }
+    if (d < 9.0) { give 8; }
+    give 9;
+}
+
+// The integer part's digits, most-significant first. magnitude must already
+// be non-negative and have its fractional part discarded by the caller.
+// Digit count is found via a bounded loop over powers of ten (at most ~19
+// iterations for any double), never over the value's own magnitude.
+text decIntegerPartToText(dec magnitude) {
+    dec scale = 1.0;
+    num digitCount = 1;
+    loop (scale * 10.0 <= magnitude) {
+        scale = scale * 10.0;
+        digitCount = digitCount + 1;
+    }
+    text result = "";
+    dec remaining = magnitude;
+    num i = 0;
+    loop (i < digitCount) {
+        num digit = decDigitAt(remaining / scale);
+        result = result + numToText(digit);
+        remaining = remaining - digit * scale;
+        scale = scale / 10.0;
+        i = i + 1;
+    }
+    give result;
+}
+
+// Up to 12 significant fractional digits, most-significant first, trimmed
+// of trailing zeros but never trimmed to nothing (matching Double.toString()
+// always showing at least one fractional digit for a whole number, e.g.
+// "2.0" not "2").
+text decFractionalPartToText(dec fractional) {
+    text digits = "";
+    dec remaining = fractional;
+    num i = 0;
+    loop (i < 12) {
+        remaining = remaining * 10.0;
+        num digit = decDigitAt(remaining);
+        digits = digits + numToText(digit);
+        remaining = remaining - digit;
+        i = i + 1;
+    }
+    num lastNonZero = 0;
+    num j = 0;
+    loop (j < textLength(digits)) {
+        if (charCodeAt(digits, j) != 48) {
+            lastNonZero = j;
+        }
+        j = j + 1;
+    }
+    give substring(digits, 0, lastNonZero + 1);
+}
+
+// The value of an already-rendered integer-part string, as a dec (not a
+// num - there is no num-valued equivalent available without narrowing, and
+// none is needed: every caller only ever subtracts this back off the
+// original magnitude to isolate the fractional part).
+dec decTextToValue(text intText) {
+    dec scale = 1.0;
+    num i = textLength(intText) - 1;
+    dec result = 0.0;
+    loop (i >= 0) {
+        num digit = charCodeAt(intText, i) - 48;
+        result = result + digit * scale;
+        scale = scale * 10.0;
+        i = i - 1;
+    }
+    give result;
+}
+
+text decToText(dec value) {
+    flag negative = value < 0.0;
+    dec magnitude = value;
+    if (negative) {
+        magnitude = 0.0 - value;
+    }
+    text intText = decIntegerPartToText(magnitude);
+    dec fractional = magnitude - decTextToValue(intText);
+    text fracText = decFractionalPartToText(fractional);
+    text result = intText + "." + fracText;
+    if (negative) {
+        give "-" + result;
+    }
+    give result;
+}
+
+// ---------------------------------------------------------------------
+// Padding, for the fixed-width columns GopiC.java's --tokens mode uses
+// (String.format("%-16s ...")) and the zero-padded instruction index
+// BytecodeDisassembler uses (String.format("%04d ...")).
+// ---------------------------------------------------------------------
+
+// show() always appends its own trailing newline (println-style, confirmed
+// by every prior differential test's one-line-per-show() assumption) - so a
+// caller with an already-fully-newline-terminated multi-line string (as
+// astPrintProgram()/disassembleModule() both build, matching Java's own
+// AstPrinter.print()/BytecodeDisassembler.disassemble() which are meant for
+// a plain, non-newline-adding print()) must strip exactly one trailing
+// newline before passing the string to show(), or the total output ends
+// with one MORE blank line than Java's plain System.out.print() produces.
+text stripTrailingNewline(text s) {
+    num len = textLength(s);
+    if (len > 0 && charCodeAt(s, len - 1) == 10) {
+        give substring(s, 0, len - 1);
+    }
+    give s;
+}
+
+text padRight(text s, num width) {
+    text result = s;
+    loop (textLength(result) < width) {
+        result = result + " ";
+    }
+    give result;
+}
+
+text zeroPad4(num value) {
+    text digits = numToText(value);
+    text result = digits;
+    loop (textLength(result) < 4) {
+        result = "0" + result;
+    }
+    give result;
+}
+
+// ---------------------------------------------------------------------
+// Enum-name text - Java's DEFAULT enum toString() (the bare constant name,
+// e.g. "INT", "NEGATE", "ADD"), as used by string concatenation in
+// AstPrinter.java (`+ literal.type() +`, `+ unary.operator() +`, etc.) and
+// by GopiC.java's --tokens mode (`token.type()`). Deliberately distinct
+// from primTypeDisplayName()/unaryOpSymbol()/binaryOpSymbol() in
+// type_rules.gopi, which give the GopiLang keyword/operator spelling used
+// in diagnostics ("num", "-") rather than the enum constant's own name
+// ("INT", "NEGATE") - two different Java methods, two different self-hosted
+// functions, on purpose.
+// ---------------------------------------------------------------------
+
+text primTypeEnumName(num elem) {
+    if (elem == primTypeInt()) { give "INT"; }
+    if (elem == primTypeFloat()) { give "FLOAT"; }
+    if (elem == primTypeBool()) { give "BOOL"; }
+    if (elem == primTypeString()) { give "STRING"; }
+    give "VOID";
+}
+
+// Mirrors TypeRef.toString() exactly: structName if present, else the
+// PRIMITIVE's enum name (not displayName) - + "[]" if an array.
+text typeToStringLabel(num elem, num isArray, text structName) {
+    text base = structName;
+    if (structName == "") {
+        base = primTypeEnumName(elem);
+    }
+    if (isArray == 1) {
+        give base + "[]";
+    }
+    give base;
+}
+
+text unaryOpEnumName(num op) {
+    if (op == unaryOpNegate()) { give "NEGATE"; }
+    give "NOT";
+}
+
+text binaryOpEnumName(num op) {
+    if (op == binaryOpAdd()) { give "ADD"; }
+    if (op == binaryOpSubtract()) { give "SUBTRACT"; }
+    if (op == binaryOpMultiply()) { give "MULTIPLY"; }
+    if (op == binaryOpDivide()) { give "DIVIDE"; }
+    if (op == binaryOpModulo()) { give "MODULO"; }
+    if (op == binaryOpEqual()) { give "EQUAL"; }
+    if (op == binaryOpNotEqual()) { give "NOT_EQUAL"; }
+    if (op == binaryOpLess()) { give "LESS"; }
+    if (op == binaryOpGreater()) { give "GREATER"; }
+    if (op == binaryOpLessEqual()) { give "LESS_EQUAL"; }
+    if (op == binaryOpGreaterEqual()) { give "GREATER_EQUAL"; }
+    if (op == binaryOpAnd()) { give "AND"; }
+    give "OR";
+}
+
+// Token kind enum names - matches TokenType.java's own declared constant
+// names exactly (verified against SelfhostLexerTest's own kindOf() mapping
+// table, which already established this exact correspondence).
+text tokenKindEnumName(num kind) {
+    if (kind == tokenKindIntLiteral()) { give "INT_LITERAL"; }
+    if (kind == tokenKindFloatLiteral()) { give "FLOAT_LITERAL"; }
+    if (kind == tokenKindStringLiteral()) { give "STRING_LITERAL"; }
+    if (kind == tokenKindBooleanLiteral()) { give "BOOLEAN_LITERAL"; }
+    if (kind == tokenKindIdentifier()) { give "IDENTIFIER"; }
+    if (kind == tokenKindKwInt()) { give "KW_INT"; }
+    if (kind == tokenKindKwFloat()) { give "KW_FLOAT"; }
+    if (kind == tokenKindKwBool()) { give "KW_BOOL"; }
+    if (kind == tokenKindKwString()) { give "KW_STRING"; }
+    if (kind == tokenKindKwVoid()) { give "KW_VOID"; }
+    if (kind == tokenKindKwIf()) { give "KW_IF"; }
+    if (kind == tokenKindKwElse()) { give "KW_ELSE"; }
+    if (kind == tokenKindKwWhile()) { give "KW_WHILE"; }
+    if (kind == tokenKindKwFor()) { give "KW_FOR"; }
+    if (kind == tokenKindKwReturn()) { give "KW_RETURN"; }
+    if (kind == tokenKindKwPrint()) { give "KW_PRINT"; }
+    if (kind == tokenKindKwNew()) { give "KW_NEW"; }
+    if (kind == tokenKindKwStruct()) { give "KW_STRUCT"; }
+    if (kind == tokenKindPlus()) { give "PLUS"; }
+    if (kind == tokenKindMinus()) { give "MINUS"; }
+    if (kind == tokenKindStar()) { give "STAR"; }
+    if (kind == tokenKindSlash()) { give "SLASH"; }
+    if (kind == tokenKindPercent()) { give "PERCENT"; }
+    if (kind == tokenKindAssign()) { give "ASSIGN"; }
+    if (kind == tokenKindEqualEqual()) { give "EQUAL_EQUAL"; }
+    if (kind == tokenKindBangEqual()) { give "BANG_EQUAL"; }
+    if (kind == tokenKindLess()) { give "LESS"; }
+    if (kind == tokenKindGreater()) { give "GREATER"; }
+    if (kind == tokenKindLessEqual()) { give "LESS_EQUAL"; }
+    if (kind == tokenKindGreaterEqual()) { give "GREATER_EQUAL"; }
+    if (kind == tokenKindAndAnd()) { give "AND_AND"; }
+    if (kind == tokenKindOrOr()) { give "OR_OR"; }
+    if (kind == tokenKindBang()) { give "BANG"; }
+    if (kind == tokenKindSemicolon()) { give "SEMICOLON"; }
+    if (kind == tokenKindComma()) { give "COMMA"; }
+    if (kind == tokenKindDot()) { give "DOT"; }
+    if (kind == tokenKindLeftParen()) { give "LEFT_PAREN"; }
+    if (kind == tokenKindRightParen()) { give "RIGHT_PAREN"; }
+    if (kind == tokenKindLeftBrace()) { give "LEFT_BRACE"; }
+    if (kind == tokenKindRightBrace()) { give "RIGHT_BRACE"; }
+    if (kind == tokenKindLeftBracket()) { give "LEFT_BRACKET"; }
+    if (kind == tokenKindRightBracket()) { give "RIGHT_BRACKET"; }
+    give "EOF";
+}

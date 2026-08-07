@@ -1,0 +1,231 @@
+// gopic.gopi - Project 2, Phase 7: the self-hosted Compiler Driver, mirroring
+// GopiC.java. Pure orchestration, exactly like the Java original: every
+// phase it touches (Lexer, Parser, Semantic Analyzer, Code Generator)
+// already owns its own logic - this file only sequences them and renders
+// diagnostics/output, adding no compiler behavior of its own.
+//
+// Two Java behaviors have NO self-hosted equivalent, both because the
+// underlying capability does not exist anywhere in GopiLang (the language,
+// the VM, or its six B1 intrinsics) and adding one would be a Java
+// production change or new VM feature - out of scope for a Compiler Driver:
+//   1. No `fileExists`-equivalent builtin exists, so compileToBytecode()
+//      cannot pre-check "does this file exist" before reading it the way
+//      Java's Files.exists() does - a missing file crashes uncaught via
+//      readFile()'s own B1-documented behavior ("READ_FILE lets uncaught
+//      Java exceptions propagate on bad input"), the same way GopiC.java's
+//      OWN --tokens/--ast modes already crash uncaught on a missing file
+//      (they call Files.readString() with no existence check at all -
+//      confirmed directly in GopiC.java; only compileToBytecode()'s two
+//      callers, run() and disassemble(), get a graceful message). This
+//      port is therefore no less graceful than Java already is for the
+//      modes Java itself never protected.
+//   2. No exit-code builtin exists - a running GopiLang program has no way
+//      to set the OS process's exit status (there is no `System.exit`
+//      equivalent). Every diagnostic and message this file prints matches
+//      Java's exactly, in the same order, under the same conditions - the
+//      only unavailable capability is the literal numeric exit code a
+//      caller of the process would observe, not any user-visible output.
+//
+// The default mode (`gopic.gopi <file.gopi>`, no flag) does not run the
+// compiled program the way `gopic <file.gopi>` does - Project 2 ends at a
+// verified BytecodeModuleData-producing compiler; the VM (and any
+// serialization) is Project 3's shared runtime infrastructure. On success,
+// this mode reports a minimal compiled-successfully confirmation instead.
+
+struct CompileResult {
+    flag ok;
+    BytecodeModuleData module;
+}
+
+BytecodeModuleData emptyModuleData() {
+    give new BytecodeModuleData(constantPoolCreate(),
+            vectorTextCreate(), vectorNumCreate(), vectorNumCreate(), vectorNumCreate(),
+            vectorTextCreate(), vectorNumCreate(),
+            vectorNumCreate(), vectorNumCreate());
+}
+
+flag endsWithGopiExtension(text s) {
+    num len = textLength(s);
+    if (len < 5) {
+        give no;
+    }
+    give substring(s, len - 5, len) == ".gopi";
+}
+
+// Java's String.isBlank(): empty, or every character is whitespace.
+// isWhitespace()/isNewline() (frozen BRL, text_utils.gopi) together cover
+// every whitespace character GopiLang's own Lexer itself treats as
+// insignificant, which is exactly the ASCII-only whitespace notion
+// relevant here.
+flag isBlankSource(text s) {
+    num len = textLength(s);
+    num i = 0;
+    flag allBlank = yes;
+    loop (i < len) {
+        num code = charCodeAt(s, i);
+        if (!(isWhitespace(code) || isNewline(code))) {
+            allBlank = no;
+        }
+        i = i + 1;
+    }
+    give allBlank;
+}
+
+// Mirrors printDiagnostics(phaseLabel, reporter, sourceLines) - minus the
+// source-line-and-caret window Diagnostic.render() draws, since
+// DiagnosticBuffer (frozen BRL) never captured a range's END position (see
+// diagnostic_buffer.gopi's own header note: "render() intentionally does
+// NOT reproduce Java's source-line-and-caret window... a close, readable
+// approximation of Java's own format" - this file extends that same,
+// already-accepted approximation to the CLI layer rather than inventing a
+// new one). Reuses diagnosticBufferRender() verbatim.
+none printDiagnosticsSection(text phaseLabel, DiagnosticBuffer diagnostics) {
+    if (diagnostics.phases.count == 0) {
+        give;
+    }
+    show("");
+    show(numToText(diagnostics.phases.count) + " " + phaseLabel + " error(s):");
+    show("");
+    show(diagnosticBufferRender(diagnostics));
+}
+
+// Direct port of compileToBytecode(): file-extension and blank-source
+// checks, lex, parse (diagnostics + early exit), semantic analyze
+// (diagnostics + early exit), code generate.
+CompileResult compileToBytecode(text sourceFile) {
+    if (!endsWithGopiExtension(sourceFile)) {
+        show("Error: expected a .gopi source file, got: " + sourceFile);
+        give new CompileResult(no, emptyModuleData());
+    }
+
+    text source = readFile(sourceFile);
+    if (isBlankSource(source)) {
+        show("Error: file is empty: " + sourceFile);
+        give new CompileResult(no, emptyModuleData());
+    }
+
+    LexerState lstate = lexerCreate(source);
+    TokenStream tokens = lexerScanTokens(lstate);
+
+    AstArena arena = arenaCreate();
+    DiagnosticBuffer parseDiags = diagnosticBufferCreate();
+    ParserState pstate = parserCreate(tokens, arena, parseDiags);
+    num programId = parseProgram(pstate);
+
+    if (lstate.diagnostics.phases.count > 0 || parseDiags.phases.count > 0) {
+        printDiagnosticsSection("lexical", lstate.diagnostics);
+        printDiagnosticsSection("syntax", parseDiags);
+        give new CompileResult(no, emptyModuleData());
+    }
+
+    DiagnosticBuffer semDiags = diagnosticBufferCreate();
+    SemanticTables tables = analyze(arena, programId, semDiags);
+
+    if (semDiags.phases.count > 0) {
+        printDiagnosticsSection("semantic", semDiags);
+        give new CompileResult(no, emptyModuleData());
+    }
+
+    BytecodeModuleData module = generate(arena, programId, tables);
+    give new CompileResult(yes, module);
+}
+
+// Direct port of printTokens(): every token, one line each, in the same
+// fixed-width columns (%-16s lexeme=%-14s literal=%-12s line:col) - lexical
+// diagnostics printed last, matching Java exactly.
+none printTokensMode(text sourceFile) {
+    text source = readFile(sourceFile);
+    LexerState lstate = lexerCreate(source);
+    TokenStream tokens = lexerScanTokens(lstate);
+
+    num i = 0;
+    loop (i < tokens.types.count) {
+        num kind = tokens.types.items[i];
+        text literalText = "-";
+        if (kind == tokenKindIntLiteral()) {
+            literalText = numToText(tokens.literalNumbers.items[i]);
+        } else if (kind == tokenKindFloatLiteral()) {
+            literalText = decToText(tokens.literalDecimals.items[i]);
+        } else if (kind == tokenKindBooleanLiteral()) {
+            literalText = "false";
+            if (tokens.literalBools.items[i] == 1) {
+                literalText = "true";
+            }
+        } else if (kind == tokenKindStringLiteral()) {
+            literalText = tokens.literalTexts.items[i];
+        }
+        show(padRight(tokenKindEnumName(kind), 16) + " lexeme=" + padRight("'" + tokens.lexemes.items[i] + "'", 14)
+                + " literal=" + padRight(literalText, 12) + " "
+                + numToText(tokens.lines.items[i]) + ":" + numToText(tokens.columns.items[i]));
+        i = i + 1;
+    }
+
+    printDiagnosticsSection("lexical", lstate.diagnostics);
+}
+
+// Direct port of printAst(): diagnostics first (lexical, then syntax -
+// recovery means the tree may be partial even when errors were found),
+// then the AST tree.
+none printAstMode(text sourceFile) {
+    text source = readFile(sourceFile);
+    LexerState lstate = lexerCreate(source);
+    TokenStream tokens = lexerScanTokens(lstate);
+
+    AstArena arena = arenaCreate();
+    DiagnosticBuffer parseDiags = diagnosticBufferCreate();
+    ParserState pstate = parserCreate(tokens, arena, parseDiags);
+    num programId = parseProgram(pstate);
+
+    printDiagnosticsSection("lexical", lstate.diagnostics);
+    printDiagnosticsSection("syntax", parseDiags);
+    show(stripTrailingNewline(astPrintProgram(arena, programId)));
+}
+
+// Direct port of disassemble().
+none disassembleMode(text sourceFile) {
+    CompileResult result = compileToBytecode(sourceFile);
+    if (result.ok) {
+        show(stripTrailingNewline(disassembleModule(result.module)));
+    }
+}
+
+// The default mode - see the header note on why this reports success
+// rather than running the compiled module.
+none runMode(text sourceFile) {
+    CompileResult result = compileToBytecode(sourceFile);
+    if (result.ok) {
+        show("Compiled successfully: " + numToText(result.module.functionNames.count) + " function(s), "
+                + numToText(result.module.structNames.count) + " struct(s), "
+                + numToText(result.module.opcodes.count) + " instruction(s).");
+    }
+}
+
+none printUsage() {
+    show("Usage: gopic <file.gopi>  |  gopic --tokens <file.gopi>  |  gopic --ast <file.gopi>  |  gopic --disassemble <file.gopi>");
+}
+
+// A safe, bounds-checked "starts with '--'" - textLength()-guarded so a
+// one-character (or empty) filename argument never asks charCodeAt() for an
+// index past the string's own length.
+flag startsWithDoubleDash(text s) {
+    num len = textLength(s);
+    if (len < 2) {
+        give no;
+    }
+    give charCodeAt(s, 0) == 45 && charCodeAt(s, 1) == 45;
+}
+
+none main() {
+    num n = argCount();
+    if (n >= 1 && !startsWithDoubleDash(argAt(0))) {
+        runMode(argAt(0));
+    } else if (n == 2 && argAt(0) == "--tokens") {
+        printTokensMode(argAt(1));
+    } else if (n == 2 && argAt(0) == "--ast") {
+        printAstMode(argAt(1));
+    } else if (n == 2 && argAt(0) == "--disassemble") {
+        disassembleMode(argAt(1));
+    } else {
+        printUsage();
+    }
+}
