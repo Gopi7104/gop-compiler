@@ -8,3 +8,4 @@ target/
 
 # OS
 .DS_Store
+target/
