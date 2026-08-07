@@ -250,4 +250,243 @@ class VirtualMachineTest {
                     """));
         }
     }
+
+    // Milestone S4, v3: struct construction, "new StructName(...)". Structs
+    // still can't be printed and have no field access, so correctness here is
+    // observed indirectly: the program must not crash, execution must reach
+    // code positioned after a construction, and evaluation order must be
+    // exactly left-to-right — every check reuses the same "print a marker"
+    // technique the short-circuit tests above already rely on.
+    @Nested
+    class NewStructConstruction {
+
+        @Test
+        void constructionPassedThroughAFunctionCallRunsToCompletion() {
+            assertEquals("took it\n", run("""
+                    struct Point { num x; num y; }
+                    none takes(Point p) { show("took it"); }
+                    none main() { takes(new Point(1, 2)); }
+                    """));
+        }
+
+        @Test
+        void discardedConstructionLeavesTheStackBalanced() {
+            // If NEW_STRUCT's POP-after-statement bookkeeping ever left an
+            // extra value behind, these two subsequent, unrelated shows would
+            // read the wrong operand-stack slot instead of their own literal.
+            assertEquals("1\n2\n", run("""
+                    struct Point { num x; num y; }
+                    none main() {
+                        new Point(1, 2);
+                        show(1);
+                        show(2);
+                    }
+                    """));
+        }
+
+        @Test
+        void evaluationOrderIsLeftToRightAtRuntime() {
+            assertEquals("A\nB\ndone\n", run("""
+                    struct Point { num x; num y; }
+                    num a() { show("A"); give 1; }
+                    num b() { show("B"); give 2; }
+                    none main() {
+                        Point p = new Point(a(), b());
+                        show("done");
+                    }
+                    """));
+        }
+
+        @Test
+        void zeroFieldStructConstructionRunsToCompletion() {
+            assertEquals("ok\n", run("""
+                    struct Empty { }
+                    none main() {
+                        Empty e = new Empty();
+                        show("ok");
+                    }
+                    """));
+        }
+
+        @Test
+        void nestedConstructionRunsToCompletion() {
+            assertEquals("nested ok\n", run("""
+                    struct Point { num x; }
+                    struct Box { Point corner; }
+                    none main() {
+                        Box b = new Box(new Point(1));
+                        show("nested ok");
+                    }
+                    """));
+        }
+
+        @Test
+        void differentStructsAllocateTheirOwnCorrectFieldCount() {
+            // Indirect check that NEW_STRUCT's struct-index operand reads the
+            // right BytecodeStruct back out — A and B have different field
+            // counts, so a mixed-up index would pop the wrong number of
+            // values off the operand stack and corrupt everything after it.
+            assertEquals("both ok\n", run("""
+                    struct A { num x; }
+                    struct B { num x; num y; num z; }
+                    none main() {
+                        A a = new A(1);
+                        B b = new B(1, 2, 3);
+                        show("both ok");
+                    }
+                    """));
+        }
+
+        @Test
+        void coexistsWithArraysInTheSameProgram() {
+            // Regression: struct construction and the existing array opcodes
+            // operate correctly side by side.
+            assertEquals("3\n", run("""
+                    struct Point { num x; }
+                    none main() {
+                        Point p = new Point(5);
+                        num[] arr = new num[2];
+                        arr[0] = 1;
+                        arr[1] = 2;
+                        show(arr[0] + arr[1]);
+                    }
+                    """));
+        }
+    }
+
+    // Phase 3, v3 Milestone S5: field access/assignment, end-to-end. VirtualMachine.java
+    // itself is unchanged — these tests confirm ARRAY_GET/ARRAY_SET reused for
+    // field access actually produce correct values at runtime, not just the
+    // right instruction shape (CodeGeneratorTest covers that half).
+    @Nested
+    class FieldAccessExpressions {
+
+        @Test
+        void constructThenReadReturnsTheConstructorArgument() {
+            assertEquals("5\n", run("""
+                    struct Point { num x; }
+                    none main() {
+                        Point p = new Point(5);
+                        show(p.x);
+                    }
+                    """));
+        }
+
+        @Test
+        void constructThenWriteThenReadObservesTheNewValue() {
+            assertEquals("42\n", run("""
+                    struct Point { num x; }
+                    none main() {
+                        Point p = new Point(5);
+                        p.x = 42;
+                        show(p.x);
+                    }
+                    """));
+        }
+
+        @Test
+        void nestedReadReturnsTheInnerStructsField() {
+            assertEquals("7\n", run("""
+                    struct Point { num x; }
+                    struct Box { Point corner; }
+                    none main() {
+                        Box b = new Box(new Point(7));
+                        show(b.corner.x);
+                    }
+                    """));
+        }
+
+        @Test
+        void nestedWriteMutatesTheInnerStructInPlace() {
+            assertEquals("99\n", run("""
+                    struct Point { num x; }
+                    struct Box { Point corner; }
+                    none main() {
+                        Box b = new Box(new Point(7));
+                        b.corner.x = 99;
+                        show(b.corner.x);
+                    }
+                    """));
+        }
+
+        @Test
+        void aliasingTwoVariablesSharingAStructSeeEachOthersWrites() {
+            // A struct is a plain Object[] reference at runtime (like arrays) —
+            // no copy-on-assign, so `other` and `p` are the same instance.
+            assertEquals("10\n", run("""
+                    struct Point { num x; }
+                    none main() {
+                        Point p = new Point(1);
+                        Point other = p;
+                        other.x = 10;
+                        show(p.x);
+                    }
+                    """));
+        }
+
+        @Test
+        void fieldContainingAnArrayReadsAndWritesThroughTheField() {
+            assertEquals("3\n", run("""
+                    struct Holder { num[] items; }
+                    none main() {
+                        Holder h = new Holder(new num[2]);
+                        h.items[0] = 1;
+                        h.items[1] = 2;
+                        show(h.items[0] + h.items[1]);
+                    }
+                    """));
+        }
+
+        @Test
+        void chainedAssignmentSetsBothTargetsToTheSameValue() {
+            assertEquals("5\n5\n", run("""
+                    struct Point { num x; }
+                    none main() {
+                        Point a = new Point(0);
+                        Point b = new Point(0);
+                        a.x = b.x = 5;
+                        show(a.x);
+                        show(b.x);
+                    }
+                    """));
+        }
+
+        @Test
+        void structsAndArraysCoexistCorrectly() {
+            // Arrays of structs still can't be constructed (a deliberate,
+            // tracked gap — see CLAUDE.md), so this exercises struct field
+            // access and plain arrays living side by side in one program.
+            assertEquals("12\n", run("""
+                    struct Point { num x; }
+                    none main() {
+                        Point a = new Point(5);
+                        Point b = new Point(7);
+                        num[] sums = new num[1];
+                        sums[0] = a.x + b.x;
+                        show(sums[0]);
+                    }
+                    """));
+        }
+
+        @Test
+        void regressionPlainArrayReadsAndWritesStillWork() {
+            assertEquals("6\n", run("""
+                    none main() {
+                        num[] arr = new num[3];
+                        arr[0] = 1;
+                        arr[1] = 2;
+                        arr[2] = 3;
+                        show(arr[0] + arr[1] + arr[2]);
+                    }
+                    """));
+        }
+
+        @Test
+        void regressionOrdinaryFunctionCallsStillWork() {
+            assertEquals("3\n", run("""
+                    num add(num a, num b) { give a + b; }
+                    none main() { show(add(1, 2)); }
+                    """));
+        }
+    }
 }

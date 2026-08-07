@@ -1,0 +1,27 @@
+// structs.gopi - struct declaration, construction, and passing/returning
+// struct values through functions. See field_access.gopi/field_assignment.gopi
+// for reading/writing a struct's own fields (Milestone S5) — this example
+// stays focused on construction and passing/returning, using "show" only on
+// markers proving each call actually happened with a real, constructed
+// struct value.
+
+struct Point {
+    num x;
+    num y;
+}
+
+Point origin() {
+    give new Point(0, 0);
+}
+
+none describe(Point p) {
+    show("got a point");
+}
+
+none main() {
+    Point p = new Point(3, 4);
+    describe(p);
+
+    Point o = origin();
+    describe(o);
+}

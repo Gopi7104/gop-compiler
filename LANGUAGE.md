@@ -17,7 +17,7 @@ Every reserved word in GopiLang, at a glance (see the linked section for full de
 | `if` / `else` | conditional branching ([`if` / `else`](#if--else)) |
 | `loop`  | while-loop ([`loop`](#loop)) |
 | `run`   | C-style for-loop, desugared to `loop` ([`run`](#run)) |
-| `new`   | array creation (`new elementType[size]`) ([Arrays](#arrays)) |
+| `new`   | array creation (`new elementType[size]`) ([Arrays](#arrays)) or struct construction (`new StructName(...)`) ([Structs](#structs)) |
 | `struct` | struct declaration ([Structs](#structs)) |
 | `give`  | return statement ([Functions](#functions)) |
 | `show`  | print statement ([`show`](#show)) |
@@ -112,7 +112,7 @@ There is no array-literal syntax (e.g. `[1, 2, 3]`) — every array is created w
 
 ## Structs
 
-**Status: a real, nominal type — declaration, resolution, and full type-checking are implemented; construction and field access are not.** A struct name may be used anywhere a type is legal — a variable's type, a parameter's type, a function's return type, or another struct's field type — and (as of Milestone S3) is properly integrated into the type system: assignability, argument/return compatibility, and printability all understand structs, nominally (by name, never by field-shape).
+**Status: a real, nominal type with runtime construction, field access, and field assignment.** A struct name may be used anywhere a type is legal — a variable's type, a parameter's type, a function's return type, or another struct's field type — is fully integrated into the type system (assignability, argument/return compatibility, and printability all understand structs, nominally, never by field-shape), can be **constructed at runtime** with `new StructName(...)`, and its fields can be **read and written** with `.`.
 
 ```
 struct Point {
@@ -120,12 +120,25 @@ struct Point {
     num y;
 }
 
+struct Box {
+    Point corner;
+}
+
 none identity(Point p) {
     give p;
 }
 
 none main() {
-    Point p;          // legal: a real, resolved struct type
+    Point p = new Point(1, 2);   // constructs a real struct value
+    Point q = identity(p);       // passes and returns it through a function
+
+    show(p.x);                   // field access: 1
+    p.x = 5;                     // field assignment
+    show(p.x);                   // 5
+
+    Box b = new Box(new Point(0, 0));
+    b.corner.x = 9;               // nested field assignment
+    show(b.corner.x);             // nested field access: 9
 }
 ```
 
@@ -137,13 +150,20 @@ Currently supported:
 - A struct name may be reused as a function name with no conflict — structs and functions are resolved in separate contexts
 - A struct name is a legal variable type, parameter type, return type, or field type, and (with `[]`) so is an array of that struct — `Point p;`, `Point[] points;`, `none foo(Point p);`, `Point[] make();` are all valid
 - **Nominal typing**: two structs with identical fields are still incompatible types — `Point`-typed and `Line`-typed values are never interchangeable just because their fields happen to match
-- Assignment, argument passing, and return values all require an exact struct-name match (or an exact array-of-that-struct match — arrays never widen, matching primitive arrays); referencing an undeclared struct name as a type is a compile-time error ("undefined struct 'X'")
+- Assignment, argument passing, and return values all require an exact struct-name match (or an exact array-of-that-struct match — arrays never widen, matching primitive arrays); referencing an undeclared struct name as a type (or constructing an undeclared struct) is a compile-time error ("undefined struct 'X'")
 - **Cycle detection**: a struct cannot contain itself, directly or indirectly, through a non-array field (`struct Node { Node next; }` and `struct A { B b; } struct B { A a; }` are both compile-time errors), but *can* reference itself through an array field (`struct Node { Node[] children; }` is legal) — an array is a runtime reference, not inline storage, so it can't create an unbounded-size struct
-- A struct value cannot be printed (`show(...)`) and cannot be used as an operand to any arithmetic, comparison, or logical operator
+- **Construction**: `new StructName(argument, ...)` — arguments are positional, one per field in declaration order, evaluated strictly left to right. Argument count and each argument's type are checked exactly like a function call's arguments (same diagnostics, same rules, same widening); constructing a struct with an undeclared name gives the same "undefined struct 'X'" error as using it in any other type position. A constructed value can be assigned, passed as an argument, or returned, anywhere its struct type is expected.
+- **Field access**: `point.x` reads one field of a struct-typed target. The target may be any expression that types to a struct — a variable (`p.x`), a struct-typed field of another struct (`box.corner.x`, any chain depth), an array element (`points[0].x`), a function call's result (`origin().x`), or a construction expression directly (`new Point(1, 2).x`) — since field resolution only cares about the target's *type*, not its expression shape.
+- **Field assignment**: `point.x = value` writes one field. `value`'s type must be assignable to the field's declared type (the same rule, including numeric widening, that governs plain variable assignment). Like plain assignment, field assignment is itself an expression, not just a statement, and is right-associative, so chained field assignment works: `a.x = b.x = 5` assigns `5` to both `a.x` and `b.x`.
+- **Nested access and assignment**: a field's target is a general expression, so `point.inner.x` and `point.inner.x = value` (and longer chains, `box.corner.left.x`) work with no extra syntax or special-casing — each `.` in the chain is an independent field access on whatever struct-typed value the expression to its left produced.
+- **Field lookup is entirely a compile-time concept.** A struct's fields are looked up by name against its declaration once, during code generation, and resolved to a plain integer index (declaration order: the first field is index 0, the second is index 1, and so on). That index is baked directly into the compiled bytecode as an operand — there is no field name, no metadata, and no lookup of any kind left at runtime. A struct value is a plain `Object[]` (exactly like an array, and with no dedicated wrapper type), so `point.x` really is nothing more than `point[thatIndex]` under the hood; `point.x` and `point[0]` (if arrays and structs could be mixed, which they can't) would compile to the identical instruction sequence.
 
-**Explicitly not yet supported** (planned for later milestones, not oversights):
-- There is no struct construction syntax (no `new Point(...)` yet) — the only way to obtain a definitely-assigned value of a struct type in a program today is a function parameter
-- There is no field access (`point.x`) or field assignment (`point.x = 5`) yet
+**Precedence and chaining**: `.` binds at the same (highest) precedence tier as function calls and array indexing (`primary`'s trailing suffixes — see [Grammar Overview](#grammar-overview)), left-to-right, and any number of suffixes may chain in any order: `a[0].corner.x`, `foo().x`, `new Point(1).x`, and `a.items[0]` are all legal for exactly this reason. There's no separate "field expression" grammar rule — `.IDENTIFIER` is just one more suffix a `call` production can apply to whatever came before it.
+
+**Explicitly not supported, on purpose** (not oversights — see [CONTRIBUTING.md](CONTRIBUTING.md#known-tracked-gaps)):
+- **Method calls** (`point.foo()`) — GopiLang has no notion of a function attached to a struct. `point.foo` alone parses as an ordinary field access (a field literally named `foo`), and a `(` immediately after it is rejected by the same "only a plain function name can be called" check that already rejects `foo()()` — there is no method dispatch mechanism, and none is planned as part of this feature.
+- **Array-of-struct construction** (`new Point[5]`) — still a parse error. `Point[]` remains a legal *type* (a field, parameter, return type, or variable may be one) with no expression in the grammar that can produce a value of it.
+- **Reflection or dynamic field names** — a field access must name its field with a literal identifier known at parse time (`point.x`, never `point.(someVariable)` or a computed string). Nothing in the language can enumerate a struct's fields, ask for a field's name or type at runtime, or look one up by a name computed while the program runs — the exact opposite of the compile-time-only design above.
 
 ## Variables
 
@@ -346,7 +366,7 @@ exprStmt       ::= expression ";"
 
 expression     ::= assignment
 assignment     ::= (assignmentTarget "=" assignment) | logicalOr
-assignmentTarget ::= IDENTIFIER | IDENTIFIER "[" expression "]"
+assignmentTarget ::= IDENTIFIER | IDENTIFIER "[" expression "]" | assignmentTarget "." IDENTIFIER
 logicalOr      ::= logicalAnd ("||" logicalAnd)*
 logicalAnd     ::= equality ("&&" equality)*
 equality       ::= comparison (("==" | "!=") comparison)*
@@ -354,10 +374,20 @@ comparison     ::= term (("<" | ">" | "<=" | ">=") term)*
 term           ::= factor (("+" | "-") factor)*
 factor         ::= unary (("*" | "/" | "%") unary)*
 unary          ::= ("!" | "-") unary | call
-call           ::= primary ( "(" arguments? ")" | "[" expression "]" | "." "len" "(" ")" )?
+call           ::= primary suffix*
+suffix         ::= "(" arguments? ")"        // function call
+                  | "[" expression "]"       // array index
+                  | "." "len" "(" ")"        // array length (the one reserved dot-suffix)
+                  | "." IDENTIFIER           // field access — anything else after "."
 arguments      ::= expression ("," expression)*
 primary        ::= INT_LITERAL | FLOAT_LITERAL | STRING_LITERAL | BOOLEAN_LITERAL
-                  | IDENTIFIER | "(" expression ")" | "new" elementType "[" expression "]"
+                  | IDENTIFIER | "(" expression ")"
+                  | "new" elementType "[" expression "]"        // array creation
+                  | "new" IDENTIFIER "(" arguments? ")"          // struct construction
 ```
 
-`assignmentTarget` isn't parsed as its own production in practice — `parseAssignment()` parses the left side as an ordinary expression first, then checks whether it turned out to be a plain identifier or an array index before treating the following `=` as an assignment; anything else followed by `=` is a parse error ("invalid assignment target").
+The token right after `"new"` decides which alternative applies with zero lookahead: a primitive keyword and an `IDENTIFIER` are disjoint token sets, so array creation and struct construction can never be confused. `arguments` here is the exact same production a function call already uses.
+
+As of Milestone S5, `call`'s suffix isn't "at most one" but a `*` loop — struct field access needs arbitrary chaining (`point.inner.left.right`, `arr[0].x`, `foo().x`), which a single-suffix shape can't express. Widening from "at most one" to "any number" is safe for the other suffixes too: a second `(` after a call (`foo()()`) still fails the existing "only a plain function name can be called" check, since neither a `FunctionCallExpression` nor a `FieldAccessExpression` is ever a plain `VariableExpression` — so `point.foo()` (a method-call shape) is rejected the same way, one token later, with no dedicated "no methods" check needed. A second `[` after an index (`arr[0][1]`) now parses for the same structural reason, but can never type-check, since GopiLang has no nested array types.
+
+`assignmentTarget` isn't parsed as its own production in practice — `parseAssignment()` parses the left side as an ordinary expression first, then checks whether it turned out to be a plain identifier, an array index, or (as of Milestone S5) a field access before treating the following `=` as an assignment; anything else followed by `=` is a parse error ("invalid assignment target").

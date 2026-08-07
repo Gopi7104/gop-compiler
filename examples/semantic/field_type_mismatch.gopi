@@ -1,0 +1,14 @@
+// field_type_mismatch.gopi
+// Expected: 1 diagnostic (TYPE) — "cannot assign 'flag' to field of type
+// 'num'". Field assignment is checked exactly like plain variable
+// assignment: the value's type must be assignable to the field's declared
+// type (numeric widening allowed, no other implicit conversion).
+
+struct Point {
+    num x;
+}
+
+none main() {
+    Point p = new Point(1);
+    p.x = yes;
+}

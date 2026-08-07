@@ -1,0 +1,8 @@
+// undefined_struct_construction.gopi
+// Expected: 1 diagnostic (SEMANTIC) — "undefined struct 'NotAStruct'".
+// Constructing a struct that was never declared is rejected the same way
+// using its name in any other type position already is.
+
+none main() {
+    new NotAStruct();
+}

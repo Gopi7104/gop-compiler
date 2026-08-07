@@ -844,6 +844,400 @@ class ParserTest {
         }
     }
 
+    // Milestone S4, v3: struct construction, "new StructName(arguments...)".
+    // The "new" dispatch is lexically unambiguous — a primitive keyword
+    // (array creation, unchanged) and an IDENTIFIER (struct construction)
+    // are disjoint token sets, so no lookahead beyond the token right after
+    // "new" is needed. Semantic analysis (undefined struct, argument
+    // count/type checking) is a separate milestone phase, not tested here —
+    // this suite covers only the parse shape.
+    @Nested
+    class NewStructExpressions {
+
+        @Test
+        void noArgumentConstructionParses() {
+            assertEquals("""
+                    Program
+                    ├── StructDeclaration Point
+                    │   └── Parameter INT x
+                    └── FunctionDeclaration main() -> VOID
+                        └── BlockStatement
+                            └── ExpressionStatement
+                                └── NewStructExpression Point(0 args)
+                    """, parseAndPrint("struct Point { num x; } none main() { new Point(); }"));
+        }
+
+        @Test
+        void twoArgumentConstructionParses() {
+            assertEquals("""
+                    Program
+                    ├── StructDeclaration Point
+                    │   ├── Parameter INT x
+                    │   └── Parameter INT y
+                    └── FunctionDeclaration main() -> VOID
+                        └── BlockStatement
+                            └── ExpressionStatement
+                                └── NewStructExpression Point(2 args)
+                                    ├── LiteralExpression 1 (INT)
+                                    └── LiteralExpression 2 (INT)
+                    """, parseAndPrint("struct Point { num x; num y; } none main() { new Point(1, 2); }"));
+        }
+
+        @Test
+        void threeArgumentConstructionWithExpressionsParses() {
+            assertEquals("""
+                    Program
+                    ├── StructDeclaration Point
+                    │   ├── Parameter INT x
+                    │   ├── Parameter INT y
+                    │   └── Parameter INT z
+                    └── FunctionDeclaration main() -> VOID
+                        └── BlockStatement
+                            ├── VariableDeclaration INT a
+                            ├── VariableDeclaration INT b
+                            ├── VariableDeclaration INT c
+                            └── ExpressionStatement
+                                └── NewStructExpression Point(3 args)
+                                    ├── VariableExpression a
+                                    ├── VariableExpression b
+                                    └── VariableExpression c
+                    """, parseAndPrint(
+                    "struct Point { num x; num y; num z; } "
+                            + "none main() { num a; num b; num c; new Point(a, b, c); }"));
+        }
+
+        @Test
+        void constructionAsAVariableInitializerParses() {
+            assertEquals("""
+                    Program
+                    ├── StructDeclaration Point
+                    │   └── Parameter INT x
+                    └── FunctionDeclaration main() -> VOID
+                        └── BlockStatement
+                            └── VariableDeclaration Point p
+                                └── NewStructExpression Point(1 args)
+                                    └── LiteralExpression 1 (INT)
+                    """, parseAndPrint("struct Point { num x; } none main() { Point p = new Point(1); }"));
+        }
+
+        @Test
+        void arrayCreationStillParsesUnchanged() {
+            // Regression: "new" dispatching on a primitive keyword still
+            // takes the existing array-creation path, untouched by the new
+            // struct-construction branch.
+            assertEquals("""
+                    Program
+                    └── FunctionDeclaration main() -> VOID
+                        └── BlockStatement
+                            └── VariableDeclaration INT[] a
+                                └── NewArrayExpression INT[]
+                                    └── LiteralExpression 5 (INT)
+                    """, parseAndPrint("none main() { num[] a = new num[5]; }"));
+        }
+
+        @Test
+        void arrayOfStructCreationIsUnsupportedByDesign() {
+            // "new Point[5]" is intentionally NOT implemented — Point[] stays
+            // a legal declarable type (see ParserTest.StructTypedDeclarations)
+            // with no way to construct one, exactly as before this milestone.
+            // parseElementType() (the array-creation path) only ever matches
+            // a primitive keyword, so an IDENTIFIER here is a parse error.
+            Parser parser = new Parser(new Lexer(
+                    "struct Point { num x; } none main() { Point[] arr = new Point[5]; }").scanTokens());
+            parser.parseProgram();
+            assertTrue(parser.reporter().hasErrors());
+        }
+
+        @Test
+        void missingClosingParenIsAParseError() {
+            Parser parser = new Parser(
+                    new Lexer("struct Point { num x; } none main() { new Point(1; }").scanTokens());
+            parser.parseProgram();
+            assertTrue(parser.reporter().hasErrors());
+        }
+
+        @Test
+        void missingOpenParenIsAParseError() {
+            Parser parser = new Parser(
+                    new Lexer("struct Point { num x; } none main() { new Point; }").scanTokens());
+            parser.parseProgram();
+            assertTrue(parser.reporter().hasErrors());
+        }
+    }
+
+    // Milestone S5, v3: struct field access and assignment, "target.field"
+    // and "target.field = value". parseCall() became a LOOP over suffixes
+    // (call/index/dot) rather than "at most one", specifically so these
+    // chain arbitrarily (point.inner.left.right, arr[0].x, foo().x). Field
+    // resolution/type checking is a later phase — this suite covers only the
+    // parse shape (semantic placeholders always yield no diagnostics here).
+    @Nested
+    class FieldAccessExpressions {
+
+        @Test
+        void basicFieldReadParses() {
+            assertEquals("""
+                    Program
+                    ├── StructDeclaration Point
+                    │   └── Parameter INT x
+                    └── FunctionDeclaration main() -> VOID
+                        └── BlockStatement
+                            ├── VariableDeclaration Point p
+                            └── ExpressionStatement
+                                └── FieldAccessExpression .x
+                                    └── VariableExpression p
+                    """, parseAndPrint("struct Point { num x; } none main() { Point p; p.x; }"));
+        }
+
+        @Test
+        void basicFieldAssignmentParses() {
+            assertEquals("""
+                    Program
+                    ├── StructDeclaration Point
+                    │   └── Parameter INT x
+                    └── FunctionDeclaration main() -> VOID
+                        └── BlockStatement
+                            ├── VariableDeclaration Point p
+                            └── ExpressionStatement
+                                └── FieldAssignmentExpression .x =
+                                    ├── VariableExpression p
+                                    └── LiteralExpression 5 (INT)
+                    """, parseAndPrint("struct Point { num x; } none main() { Point p; p.x = 5; }"));
+        }
+
+        @Test
+        void nestedFieldReadParses() {
+            assertEquals("""
+                    Program
+                    ├── StructDeclaration Point
+                    │   └── Parameter INT x
+                    ├── StructDeclaration Box
+                    │   └── Parameter Point inner
+                    └── FunctionDeclaration main() -> VOID
+                        └── BlockStatement
+                            ├── VariableDeclaration Box b
+                            └── ExpressionStatement
+                                └── FieldAccessExpression .x
+                                    └── FieldAccessExpression .inner
+                                        └── VariableExpression b
+                    """, parseAndPrint(
+                    "struct Point { num x; } struct Box { Point inner; } none main() { Box b; b.inner.x; }"));
+        }
+
+        @Test
+        void nestedFieldAssignmentParses() {
+            assertEquals("""
+                    Program
+                    ├── StructDeclaration Point
+                    │   └── Parameter INT x
+                    ├── StructDeclaration Box
+                    │   └── Parameter Point inner
+                    └── FunctionDeclaration main() -> VOID
+                        └── BlockStatement
+                            ├── VariableDeclaration Box b
+                            └── ExpressionStatement
+                                └── FieldAssignmentExpression .x =
+                                    ├── FieldAccessExpression .inner
+                                    │   └── VariableExpression b
+                                    └── LiteralExpression 5 (INT)
+                    """, parseAndPrint(
+                    "struct Point { num x; } struct Box { Point inner; } none main() { Box b; b.inner.x = 5; }"));
+        }
+
+        @Test
+        void fieldReadOnArrayIndexResultParses() {
+            assertEquals("""
+                    Program
+                    ├── StructDeclaration Point
+                    │   └── Parameter INT x
+                    └── FunctionDeclaration main() -> VOID
+                        └── BlockStatement
+                            ├── VariableDeclaration Point[] arr
+                            └── ExpressionStatement
+                                └── FieldAccessExpression .x
+                                    └── ArrayAccessExpression
+                                        ├── VariableExpression arr
+                                        └── LiteralExpression 0 (INT)
+                    """, parseAndPrint("struct Point { num x; } none main() { Point[] arr; arr[0].x; }"));
+        }
+
+        @Test
+        void fieldReadOnFunctionCallResultParses() {
+            assertEquals("""
+                    Program
+                    ├── StructDeclaration Point
+                    │   └── Parameter INT x
+                    ├── FunctionDeclaration foo() -> Point
+                    │   └── BlockStatement
+                    └── FunctionDeclaration main() -> VOID
+                        └── BlockStatement
+                            └── ExpressionStatement
+                                └── FieldAccessExpression .x
+                                    └── FunctionCallExpression foo(0 args)
+                    """, parseAndPrint("struct Point { num x; } Point foo() { } none main() { foo().x; }"));
+        }
+
+        @Test
+        void fieldReadOnConstructionResultParses() {
+            assertEquals("""
+                    Program
+                    ├── StructDeclaration Point
+                    │   └── Parameter INT x
+                    └── FunctionDeclaration main() -> VOID
+                        └── BlockStatement
+                            └── ExpressionStatement
+                                └── FieldAccessExpression .x
+                                    └── NewStructExpression Point(1 args)
+                                        └── LiteralExpression 1 (INT)
+                    """, parseAndPrint("struct Point { num x; } none main() { new Point(1).x; }"));
+        }
+
+        @Test
+        void fieldReadOnParenthesizedConstructionResultParses() {
+            assertEquals("""
+                    Program
+                    ├── StructDeclaration Point
+                    │   └── Parameter INT x
+                    └── FunctionDeclaration main() -> VOID
+                        └── BlockStatement
+                            └── ExpressionStatement
+                                └── FieldAccessExpression .x
+                                    └── GroupingExpression
+                                        └── NewStructExpression Point(1 args)
+                                            └── LiteralExpression 1 (INT)
+                    """, parseAndPrint("struct Point { num x; } none main() { (new Point(1)).x; }"));
+        }
+
+        @Test
+        void fieldReadYieldingAnArrayCanBeFurtherIndexed() {
+            assertEquals("""
+                    Program
+                    ├── StructDeclaration Point
+                    │   └── Parameter INT x
+                    ├── StructDeclaration Box
+                    │   └── Parameter Point[] corners
+                    └── FunctionDeclaration main() -> VOID
+                        └── BlockStatement
+                            ├── VariableDeclaration Box b
+                            └── ExpressionStatement
+                                └── ArrayAccessExpression
+                                    ├── FieldAccessExpression .corners
+                                    │   └── VariableExpression b
+                                    └── LiteralExpression 0 (INT)
+                    """, parseAndPrint(
+                    "struct Point { num x; } struct Box { Point[] corners; } "
+                            + "none main() { Box b; b.corners[0]; }"));
+        }
+
+        @Test
+        void fieldNamedLenIsFieldAccessNotArrayLength() {
+            // "b.len" (no parens) is a field access, even though "len" is the
+            // one reserved dot-suffix — the trailing "(" is what selects
+            // ArrayLengthExpression, not the identifier spelling alone.
+            assertEquals("""
+                    Program
+                    ├── StructDeclaration Box
+                    │   └── Parameter INT len
+                    └── FunctionDeclaration main() -> VOID
+                        └── BlockStatement
+                            ├── VariableDeclaration Box b
+                            └── ExpressionStatement
+                                └── FieldAccessExpression .len
+                                    └── VariableExpression b
+                    """, parseAndPrint("struct Box { num len; } none main() { Box b; b.len; }"));
+        }
+
+        @Test
+        void arrayDotLenStillParsesAsArrayLength() {
+            // Regression: the loop-ified parseCall() must not disturb the
+            // existing ".len()" shape, even in a program that also declares
+            // structs.
+            assertEquals("""
+                    Program
+                    ├── StructDeclaration Point
+                    │   └── Parameter INT x
+                    └── FunctionDeclaration main() -> VOID
+                        └── BlockStatement
+                            ├── VariableDeclaration INT[] arr
+                            └── PrintStatement
+                                └── ArrayLengthExpression
+                                    └── VariableExpression arr
+                    """, parseAndPrint(
+                    "struct Point { num x; } none main() { num[] arr; show(arr.len()); }"));
+        }
+
+        @Test
+        void dotWithNothingAfterIsAParseError() {
+            Parser parser = new Parser(
+                    new Lexer("struct Point { num x; } none main() { Point p; p.; }").scanTokens());
+            parser.parseProgram();
+            assertTrue(parser.reporter().hasErrors());
+        }
+
+        @Test
+        void callingAFieldAccessIsAParseError() {
+            // "p.foo()" — no methods exist. ".foo" parses as a
+            // FieldAccessExpression, and the loop's next iteration rejects
+            // the "(" via the same "only a plain function name can be
+            // called" check a plain call already uses.
+            Parser parser = new Parser(
+                    new Lexer("struct Point { num x; } none main() { Point p; p.foo(); }").scanTokens());
+            parser.parseProgram();
+            assertTrue(parser.reporter().hasErrors());
+        }
+
+        @Test
+        void callingACallResultIsStillAParseError() {
+            // "foo()()" — call-chaining stays unsupported; the loop's second
+            // "(" is rejected by the same existing guard, just one token
+            // later than before.
+            Parser parser = new Parser(new Lexer("none foo() { } none main() { foo()(); }").scanTokens());
+            parser.parseProgram();
+            assertTrue(parser.reporter().hasErrors());
+        }
+
+        @Test
+        void doubleIndexingNowParsesButIsNotASemanticGap() {
+            // "arr[0][1]" — GopiLang has no nested array types, so this can
+            // never type-check (SemanticAnalyzer's existing "cannot index
+            // into non-array type" check rejects it unchanged); it's
+            // accepted here as a deliberate, harmless side effect of the
+            // suffix loop, not a new capability.
+            assertEquals("""
+                    Program
+                    └── FunctionDeclaration main() -> VOID
+                        └── BlockStatement
+                            ├── VariableDeclaration INT[] arr
+                            └── ExpressionStatement
+                                └── ArrayAccessExpression
+                                    ├── ArrayAccessExpression
+                                    │   ├── VariableExpression arr
+                                    │   └── LiteralExpression 0 (INT)
+                                    └── LiteralExpression 1 (INT)
+                    """, parseAndPrint("none main() { num[] arr; arr[0][1]; }"));
+        }
+
+        @Test
+        void chainedFieldAssignmentParses() {
+            assertEquals("""
+                    Program
+                    ├── StructDeclaration Point
+                    │   └── Parameter INT x
+                    └── FunctionDeclaration main() -> VOID
+                        └── BlockStatement
+                            ├── VariableDeclaration Point a
+                            ├── VariableDeclaration Point b
+                            └── ExpressionStatement
+                                └── FieldAssignmentExpression .x =
+                                    ├── VariableExpression a
+                                    └── FieldAssignmentExpression .x =
+                                        ├── VariableExpression b
+                                        └── LiteralExpression 5 (INT)
+                    """, parseAndPrint(
+                    "struct Point { num x; } none main() { Point a; Point b; a.x = b.x = 5; }"));
+        }
+    }
+
     // Nested blocks matter because they exercise parseBlock() and
     // parseStatement() calling each other recursively — the mutual-recursion
     // structure that made these two methods impossible to compile/test in

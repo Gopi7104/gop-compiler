@@ -1,10 +1,12 @@
 com/gopilang/vm/Frame.class
+com/gopilang/bytecode/BytecodeStruct.class
 com/gopilang/ast/AssignmentExpression.class
 com/gopilang/util/SourceRange.class
 com/gopilang/ast/Stmt.class
 com/gopilang/semantic/TypeRules$1.class
 com/gopilang/ast/Expr.class
 com/gopilang/ast/UnaryExpression.class
+com/gopilang/ast/FieldAssignmentExpression.class
 com/gopilang/parser/Parser$1.class
 com/gopilang/util/SourceLocation.class
 com/gopilang/semantic/Scope.class
@@ -41,7 +43,6 @@ com/gopilang/vm/VirtualMachine.class
 com/gopilang/semantic/StructSymbol.class
 com/gopilang/ast/ArrayAccessExpression.class
 com/gopilang/lexer/package-info.class
-com/gopilang/parser/Parser$ParsedType.class
 com/gopilang/ast/BlockStatement.class
 com/gopilang/ast/PrintStatement.class
 com/gopilang/ast/VariableDeclaration.class
@@ -51,6 +52,8 @@ com/gopilang/ast/StructDeclaration.class
 com/gopilang/lexer/Token.class
 com/gopilang/ast/ReturnStatement.class
 com/gopilang/vm/package-info.class
+com/gopilang/ast/NewStructExpression.class
+com/gopilang/ast/FieldAccessExpression.class
 com/gopilang/ast/Parameter.class
 com/gopilang/semantic/VariableSymbol.class
 com/gopilang/ast/BinaryOperator.class

@@ -63,6 +63,19 @@ class CodeGeneratorTest {
         return opcodes;
     }
 
+    // Mirrors functionInstructions()'s own name-to-index lookup, for
+    // NEW_STRUCT's operand (a struct index, not a field count — see
+    // NewStructConstruction below).
+    private static int structIndexOf(BytecodeModule module, String name) {
+        List<BytecodeStruct> structs = module.structs();
+        for (int i = 0; i < structs.size(); i++) {
+            if (structs.get(i).name().equals(name)) {
+                return i;
+            }
+        }
+        throw new AssertionError("no struct named '" + name + "' in compiled module");
+    }
+
     @Nested
     class LogicalAnd {
 
@@ -161,6 +174,251 @@ class CodeGeneratorTest {
             // constant-push fallback: OR's short-circuit-to-true, and AND's
             // short-circuit-to-false.
             assertEquals(2, opcodes.stream().filter(Opcode.PUSH_CONST::equals).count());
+        }
+    }
+
+    // Milestone S4, v3: struct construction, "new StructName(...)". NEW_STRUCT
+    // encodes a STRUCT INDEX (module.structs(), addressed the same way CALL
+    // addresses module.functions()) — not a field count — so the VM can read
+    // the field count (and later, richer metadata) back out of that table.
+    @Nested
+    class NewStructConstruction {
+
+        @Test
+        void zeroFieldConstructionCompilesToNewStructAlone() {
+            BytecodeModule module = compile("struct Empty { } none main() { Empty e = new Empty(); }");
+            List<Instruction> instructions = functionInstructions(module, "main");
+
+            assertEquals(List.of(Opcode.NEW_STRUCT, Opcode.STORE, Opcode.RETURN), opcodesOf(instructions));
+            assertEquals(structIndexOf(module, "Empty"), instructions.get(0).operand());
+        }
+
+        @Test
+        void multiFieldConstructionEvaluatesArgumentsThenEmitsNewStruct() {
+            BytecodeModule module = compile(
+                    "struct Point { num x; num y; } none main() { Point p = new Point(1, 2); }");
+            List<Instruction> instructions = functionInstructions(module, "main");
+
+            assertEquals(
+                    List.of(Opcode.PUSH_CONST, Opcode.PUSH_CONST, Opcode.NEW_STRUCT, Opcode.STORE, Opcode.RETURN),
+                    opcodesOf(instructions));
+            assertEquals(structIndexOf(module, "Point"), instructions.get(2).operand());
+        }
+
+        @Test
+        void discardedConstructionIsPoppedLikeAnyOtherNonVoidExpressionStatement() {
+            BytecodeModule module = compile(
+                    "struct Point { num x; num y; } none main() { new Point(1, 2); }");
+            List<Instruction> instructions = functionInstructions(module, "main");
+
+            assertEquals(
+                    List.of(Opcode.PUSH_CONST, Opcode.PUSH_CONST, Opcode.NEW_STRUCT, Opcode.POP, Opcode.RETURN),
+                    opcodesOf(instructions));
+        }
+
+        @Test
+        void evaluationOrderIsLeftToRight() {
+            BytecodeModule module = compile(
+                    "struct Point { num x; num y; num z; } "
+                            + "none main() { Point p = new Point(10, 20, 30); }");
+            List<Instruction> instructions = functionInstructions(module, "main");
+
+            assertEquals(
+                    List.of(Opcode.PUSH_CONST, Opcode.PUSH_CONST, Opcode.PUSH_CONST, Opcode.NEW_STRUCT,
+                            Opcode.STORE, Opcode.RETURN),
+                    opcodesOf(instructions));
+            assertEquals(10, module.constantPool().get(instructions.get(0).operand()));
+            assertEquals(20, module.constantPool().get(instructions.get(1).operand()));
+            assertEquals(30, module.constantPool().get(instructions.get(2).operand()));
+        }
+
+        @Test
+        void structIndexMatchesDeclarationOrderNotFieldCount() {
+            // B has MORE fields than A, so if NEW_STRUCT's operand were ever
+            // accidentally a field count instead of an index, this would
+            // catch it: A's operand must be 0 (declared first) even though
+            // it has fewer fields than B.
+            BytecodeModule module = compile(
+                    "struct A { num x; } struct B { num x; num y; num z; } "
+                            + "none main() { new A(1); new B(1, 2, 3); }");
+            List<Instruction> instructions = functionInstructions(module, "main");
+            List<Instruction> newStructInstructions = instructions.stream()
+                    .filter(i -> i.opcode() == Opcode.NEW_STRUCT).toList();
+
+            assertEquals(2, newStructInstructions.size());
+            assertEquals(structIndexOf(module, "A"), newStructInstructions.get(0).operand());
+            assertEquals(structIndexOf(module, "B"), newStructInstructions.get(1).operand());
+        }
+
+        @Test
+        void nestedConstructionCompilesInnerConstructionFirst() {
+            BytecodeModule module = compile(
+                    "struct Point { num x; } struct Box { Point corner; } "
+                            + "none main() { Box b = new Box(new Point(1)); }");
+            List<Instruction> instructions = functionInstructions(module, "main");
+
+            assertEquals(
+                    List.of(Opcode.PUSH_CONST, Opcode.NEW_STRUCT, Opcode.NEW_STRUCT, Opcode.STORE, Opcode.RETURN),
+                    opcodesOf(instructions));
+            assertEquals(structIndexOf(module, "Point"), instructions.get(1).operand());
+            assertEquals(structIndexOf(module, "Box"), instructions.get(2).operand());
+        }
+
+        @Test
+        void constructionPassedAsAFunctionArgumentEvaluatesBeforeTheCall() {
+            BytecodeModule module = compile(
+                    "struct Point { num x; } none takes(Point p) { } "
+                            + "none main() { takes(new Point(1)); }");
+            List<Instruction> instructions = functionInstructions(module, "main");
+
+            assertEquals(List.of(Opcode.PUSH_CONST, Opcode.NEW_STRUCT, Opcode.CALL, Opcode.RETURN),
+                    opcodesOf(instructions));
+        }
+
+        @Test
+        void arrayCreationBytecodeIsUnaffectedByStructConstruction() {
+            // Regression: NEW_ARRAY's own compilation path is untouched.
+            BytecodeModule module = compile("none main() { num[] a = new num[5]; }");
+            List<Instruction> instructions = functionInstructions(module, "main");
+
+            assertEquals(List.of(Opcode.PUSH_CONST, Opcode.NEW_ARRAY, Opcode.STORE, Opcode.RETURN),
+                    opcodesOf(instructions));
+        }
+    }
+
+    // Phase 3, v3 Milestone S5: field access/assignment compile to the
+    // existing ARRAY_GET/ARRAY_SET opcodes — no new opcode, no VM change.
+    // A struct instance is a plain Object[] at runtime (see NewStructConstruction
+    // above), so `point.x` is exactly `point[fieldIndex(x)]` in disguise.
+    @Nested
+    class FieldAccessExpressions {
+
+        @Test
+        void basicReadCompilesToPushConstThenArrayGet() {
+            BytecodeModule module = compile(
+                    "struct Point { num x; } none main() { Point p = new Point(1); num v = p.x; }");
+            List<Instruction> instructions = functionInstructions(module, "main");
+
+            assertEquals(
+                    List.of(Opcode.PUSH_CONST, Opcode.NEW_STRUCT, Opcode.STORE,
+                            Opcode.LOAD, Opcode.PUSH_CONST, Opcode.ARRAY_GET, Opcode.STORE, Opcode.RETURN),
+                    opcodesOf(instructions));
+            // The PUSH_CONST feeding ARRAY_GET must push field index 0 (x is the only field).
+            int fieldIndexConst = instructions.get(4).operand();
+            assertEquals(0, module.constantPool().get(fieldIndexConst));
+        }
+
+        @Test
+        void basicWriteCompilesToPushConstThenValueThenArraySet() {
+            BytecodeModule module = compile(
+                    "struct Point { num x; } none main() { Point p = new Point(1); p.x = 5; }");
+            List<Instruction> instructions = functionInstructions(module, "main");
+
+            assertEquals(
+                    List.of(Opcode.PUSH_CONST, Opcode.NEW_STRUCT, Opcode.STORE,
+                            Opcode.LOAD, Opcode.PUSH_CONST, Opcode.PUSH_CONST, Opcode.ARRAY_SET, Opcode.POP,
+                            Opcode.RETURN),
+                    opcodesOf(instructions));
+        }
+
+        @Test
+        void multiFieldIndexCorrectness() {
+            // y is declared second, so p.y must push field index 1, not 0.
+            BytecodeModule module = compile(
+                    "struct Point { num x; num y; } "
+                            + "none main() { Point p = new Point(1, 2); num v = p.y; }");
+            List<Instruction> instructions = functionInstructions(module, "main");
+            List<Instruction> arrayGets = instructions.stream()
+                    .filter(i -> i.opcode() == Opcode.ARRAY_GET).toList();
+
+            assertEquals(1, arrayGets.size());
+            int arrayGetIndex = instructions.indexOf(arrayGets.get(0));
+            int fieldIndexConst = instructions.get(arrayGetIndex - 1).operand();
+            assertEquals(1, module.constantPool().get(fieldIndexConst));
+        }
+
+        @Test
+        void nestedReadCompilesTargetRecursivelyThenOuterFieldAccess() {
+            BytecodeModule module = compile(
+                    "struct Point { num x; } struct Box { Point corner; } "
+                            + "none main() { Box b = new Box(new Point(1)); num v = b.corner.x; }");
+            List<Instruction> instructions = functionInstructions(module, "main");
+
+            assertEquals(
+                    List.of(Opcode.PUSH_CONST, Opcode.NEW_STRUCT, Opcode.NEW_STRUCT, Opcode.STORE,
+                            Opcode.LOAD, Opcode.PUSH_CONST, Opcode.ARRAY_GET, Opcode.PUSH_CONST, Opcode.ARRAY_GET,
+                            Opcode.STORE, Opcode.RETURN),
+                    opcodesOf(instructions));
+        }
+
+        @Test
+        void nestedWriteCompilesTargetThenFieldIndexThenValueThenArraySet() {
+            BytecodeModule module = compile(
+                    "struct Point { num x; } struct Box { Point corner; } "
+                            + "none main() { Box b = new Box(new Point(1)); b.corner.x = 9; }");
+            List<Instruction> instructions = functionInstructions(module, "main");
+
+            assertEquals(
+                    List.of(Opcode.PUSH_CONST, Opcode.NEW_STRUCT, Opcode.NEW_STRUCT, Opcode.STORE,
+                            Opcode.LOAD, Opcode.PUSH_CONST, Opcode.ARRAY_GET, Opcode.PUSH_CONST, Opcode.PUSH_CONST,
+                            Opcode.ARRAY_SET, Opcode.POP, Opcode.RETURN),
+                    opcodesOf(instructions));
+        }
+
+        @Test
+        void repeatedFieldAccessesReuseConstantPoolSlot() {
+            BytecodeModule module = compile(
+                    "struct Point { num x; } "
+                            + "none main() { Point p = new Point(1); num a = p.x; num b = p.x; }");
+            List<Instruction> instructions = functionInstructions(module, "main");
+            List<Instruction> arrayGets = instructions.stream()
+                    .filter(i -> i.opcode() == Opcode.ARRAY_GET).toList();
+            assertEquals(2, arrayGets.size());
+
+            long zeroCount = module.constantPool().stream()
+                    .filter(value -> value instanceof Integer i && i == 0).count();
+            assertEquals(1, zeroCount, "both p.x reads should reuse the same field-index 0 constant");
+        }
+
+        @Test
+        void chainedAssignmentReusesArraySetsPushedBackValue() {
+            // ARRAY_SET already pushes the assigned value back, so
+            // `a.x = b.x = 5` needs no extra opcode for chaining.
+            BytecodeModule module = compile(
+                    "struct Point { num x; } "
+                            + "none main() { Point a = new Point(0); Point b = new Point(0); a.x = b.x = 5; }");
+            List<Instruction> instructions = functionInstructions(module, "main");
+
+            long arraySetCount = instructions.stream().filter(i -> i.opcode() == Opcode.ARRAY_SET).count();
+            assertEquals(2, arraySetCount);
+            // No DUP anywhere in this chain — ARRAY_SET's own pushed-back value is reused directly.
+            assertTrue(instructions.stream().noneMatch(i -> i.opcode() == Opcode.DUP));
+        }
+
+        @Test
+        void arrayBytecodeUnaffectedByFieldAccess() {
+            // Regression: plain array indexing still compiles to exactly ARRAY_GET/ARRAY_SET, unchanged.
+            BytecodeModule module = compile(
+                    "none main() { num[] a = new num[3]; a[0] = 1; num v = a[0]; }");
+            List<Instruction> instructions = functionInstructions(module, "main");
+
+            assertEquals(
+                    List.of(Opcode.PUSH_CONST, Opcode.NEW_ARRAY, Opcode.STORE,
+                            Opcode.LOAD, Opcode.PUSH_CONST, Opcode.PUSH_CONST, Opcode.ARRAY_SET, Opcode.POP,
+                            Opcode.LOAD, Opcode.PUSH_CONST, Opcode.ARRAY_GET, Opcode.STORE, Opcode.RETURN),
+                    opcodesOf(instructions));
+        }
+
+        @Test
+        void structConstructionBytecodeUnaffectedByFieldAccess() {
+            // Regression: NEW_STRUCT's own compilation path (covered in
+            // NewStructConstruction above) is untouched by field access existing.
+            BytecodeModule module = compile("struct Point { num x; num y; } none main() { Point p = new Point(1, 2); }");
+            List<Instruction> instructions = functionInstructions(module, "main");
+
+            assertEquals(
+                    List.of(Opcode.PUSH_CONST, Opcode.PUSH_CONST, Opcode.NEW_STRUCT, Opcode.STORE, Opcode.RETURN),
+                    opcodesOf(instructions));
         }
     }
 }

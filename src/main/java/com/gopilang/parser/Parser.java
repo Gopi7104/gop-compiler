@@ -8,6 +8,8 @@ import com.gopilang.ast.BinaryOperator;
 import com.gopilang.ast.BlockStatement;
 import com.gopilang.ast.Expr;
 import com.gopilang.ast.ExpressionStatement;
+import com.gopilang.ast.FieldAccessExpression;
+import com.gopilang.ast.FieldAssignmentExpression;
 import com.gopilang.ast.FunctionCallExpression;
 import com.gopilang.ast.FunctionDeclaration;
 import com.gopilang.ast.GroupingExpression;
@@ -15,6 +17,7 @@ import com.gopilang.ast.IfStatement;
 import com.gopilang.ast.IndexAssignmentExpression;
 import com.gopilang.ast.LiteralExpression;
 import com.gopilang.ast.NewArrayExpression;
+import com.gopilang.ast.NewStructExpression;
 import com.gopilang.ast.Parameter;
 import com.gopilang.ast.PrintStatement;
 import com.gopilang.ast.Program;
@@ -381,6 +384,9 @@ public final class Parser {
             if (expr instanceof ArrayAccessExpression access) {
                 return new IndexAssignmentExpression(access.array(), access.index(), value, range);
             }
+            if (expr instanceof FieldAccessExpression access) {
+                return new FieldAssignmentExpression(access.target(), access.fieldName(), value, range);
+            }
             throw new ParseError("invalid assignment target", expr.range());
         }
         return expr;
@@ -479,49 +485,91 @@ public final class Parser {
         return parseCall();
     }
 
-    // call ::= primary ( "(" argList? ")" | "[" expression "]" | "." "len" "(" ")" )?
+    // call ::= primary ( "(" argList? ")" | "[" expression "]" | "." "len" "(" ")" | "." IDENTIFIER )*
     // — not in the originally listed ten methods, but required for
     // FunctionCallExpression (one of the frozen Expr nodes) to ever be
     // constructible; restored from Milestone 3's original grammar between
-    // parseUnary() and parsePrimary(). Indexing and '.len()' were added
-    // alongside it, at most one suffix, same as calls — matching the
-    // existing (non-chaining) limitation rather than lifting it.
+    // parseUnary() and parsePrimary(). As of Milestone S5, this is a LOOP
+    // (zero or more suffixes) rather than "at most one" — struct field
+    // access needs arbitrary chaining ("point.inner.left.right", "arr[0].x",
+    // "foo().x"), which a single-suffix shape can't express. Widening from
+    // "at most one" to "any number" is safe for the OTHER suffixes too: a
+    // second "(" after a call (e.g. "foo()()") still hits the existing
+    // "only a plain function name can be called" check below, since a
+    // FunctionCallExpression is never a VariableExpression — so call-chaining
+    // stays exactly as unsupported as before, just rejected one step later
+    // with a clearer diagnostic. A second "[" after an index (e.g.
+    // "arr[0][1]") now parses, but can never type-check, since GopiLang has
+    // no nested array types — SemanticAnalyzer's existing "cannot index into
+    // non-array type" check rejects it unchanged.
     private Expr parseCall() {
         Expr expr = parsePrimary();
-        if (match(TokenType.LEFT_PAREN)) {
-            if (!(expr instanceof VariableExpression callee)) {
-                throw new ParseError("only a plain function name can be called", expr.range());
+        while (true) {
+            if (match(TokenType.LEFT_PAREN)) {
+                if (!(expr instanceof VariableExpression callee)) {
+                    throw new ParseError("only a plain function name can be called", expr.range());
+                }
+                List<Expr> arguments = parseArguments();
+                Token closing = consume(TokenType.RIGHT_PAREN, "expected ')' after arguments");
+                expr = new FunctionCallExpression(callee.name(), arguments,
+                        new SourceRange(callee.range().start(), closing.location()));
+            } else if (match(TokenType.LEFT_BRACKET)) {
+                Expr index = parseExpression();
+                Token closing = consume(TokenType.RIGHT_BRACKET, "expected ']' after array index");
+                expr = new ArrayAccessExpression(expr, index, new SourceRange(expr.range().start(), closing.location()));
+            } else if (match(TokenType.DOT)) {
+                Token name = consume(TokenType.IDENTIFIER, "expected a field name after '.'");
+                // "len(" is the one reserved dot-suffix (array length); any
+                // other identifier — including "len" NOT followed by "(",
+                // e.g. a struct field literally named "len" — is a field
+                // access. A trailing "(" on any other name (a method call)
+                // isn't a shape this milestone produces a node for at all;
+                // it's left to fall through as a plain FieldAccessExpression,
+                // and the loop's own next iteration rejects the "(" via the
+                // same "only a plain function name can be called" check
+                // above, since a FieldAccessExpression is never a
+                // VariableExpression either.
+                if (name.lexeme().equals("len") && check(TokenType.LEFT_PAREN)) {
+                    advance(); // consume '('
+                    Token closing = consume(TokenType.RIGHT_PAREN, "expected ')' after 'len('");
+                    expr = new ArrayLengthExpression(expr, new SourceRange(expr.range().start(), closing.location()));
+                } else {
+                    expr = new FieldAccessExpression(expr, name.lexeme(),
+                            new SourceRange(expr.range().start(), name.location()));
+                }
+            } else {
+                return expr;
             }
-            List<Expr> arguments = new ArrayList<>();
-            if (!check(TokenType.RIGHT_PAREN)) {
-                do {
-                    arguments.add(parseExpression());
-                } while (match(TokenType.COMMA));
-            }
-            Token closing = consume(TokenType.RIGHT_PAREN, "expected ')' after arguments");
-            return new FunctionCallExpression(callee.name(), arguments,
-                    new SourceRange(callee.range().start(), closing.location()));
         }
-        if (match(TokenType.LEFT_BRACKET)) {
-            Expr index = parseExpression();
-            Token closing = consume(TokenType.RIGHT_BRACKET, "expected ']' after array index");
-            return new ArrayAccessExpression(expr, index, new SourceRange(expr.range().start(), closing.location()));
+    }
+
+    // arguments ::= (expression ("," expression)*)? — shared by a function
+    // call and a struct construction, both of which are just "(" arguments?
+    // ")" after their own distinct prefix.
+    private List<Expr> parseArguments() {
+        List<Expr> arguments = new ArrayList<>();
+        if (!check(TokenType.RIGHT_PAREN)) {
+            do {
+                arguments.add(parseExpression());
+            } while (match(TokenType.COMMA));
         }
-        if (match(TokenType.DOT)) {
-            if (!check(TokenType.IDENTIFIER) || !peek().lexeme().equals("len")) {
-                throw new ParseError(describeMismatch("expected 'len' after '.'"), SourceRange.point(peek().location()));
-            }
-            advance(); // consume 'len'
-            consume(TokenType.LEFT_PAREN, "expected '(' after 'len'");
-            Token closing = consume(TokenType.RIGHT_PAREN, "expected ')' after 'len('");
-            return new ArrayLengthExpression(expr, new SourceRange(expr.range().start(), closing.location()));
-        }
-        return expr;
+        return arguments;
     }
 
     private Expr parsePrimary() {
         if (match(TokenType.KW_NEW)) {
             SourceLocation start = previous().location();
+            // "new" is followed by either a struct name (construction) or a
+            // primitive element type (array creation) — the two token sets
+            // are disjoint (a keyword can never also lex as an IDENTIFIER),
+            // so no lookahead beyond this one token is needed.
+            if (check(TokenType.IDENTIFIER)) {
+                Token name = advance();
+                consume(TokenType.LEFT_PAREN, "expected '(' after struct name");
+                List<Expr> arguments = parseArguments();
+                Token closing = consume(TokenType.RIGHT_PAREN, "expected ')' after arguments");
+                return new NewStructExpression(name.lexeme(), arguments, new SourceRange(start, closing.location()));
+            }
             PrimitiveType elementType = parseElementType();
             consume(TokenType.LEFT_BRACKET, "expected '[' after array element type");
             Expr size = parseExpression();

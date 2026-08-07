@@ -1,0 +1,16 @@
+// constructor_argument_mismatch.gopi
+// Expected: 2 diagnostics (both TYPE):
+//   1. "struct 'Point' expects 2 argument(s), found 1" — one argument short
+//      of Point's two fields.
+//   2. "argument 2 of struct 'Point': expected 'num', found 'flag'" — the
+//      right argument COUNT this time, but the wrong TYPE for the second one.
+
+struct Point {
+    num x;
+    num y;
+}
+
+none main() {
+    Point tooFewArgs = new Point(1);
+    Point wrongArgType = new Point(1, yes);
+}

@@ -26,11 +26,11 @@ $ ./gopic examples/factorial.gopi
 
 - **Hand-written recursive-descent lexer and parser** — no generated code anywhere in the pipeline.
 - **Static semantic analysis**: scope-aware identifier resolution, type checking, reachability analysis, and definite-assignment checking, all before a single instruction is generated.
-- **A real bytecode compiler** targeting a small, uniform stack-machine instruction set (see [`Opcode`](src/main/java/com/gopilang/bytecode/Opcode.java) — 38 opcodes, fixed `(opcode, operand)` instruction shape, no variable-length encoding).
+- **A real bytecode compiler** targeting a small, uniform stack-machine instruction set (see [`Opcode`](src/main/java/com/gopilang/bytecode/Opcode.java) — 30 opcodes, fixed `(opcode, operand)` instruction shape, no variable-length encoding).
 - **A stack-based virtual machine** with call frames, a shared instruction stream, and full function-call/recursion support.
 - **Rich diagnostics** with source-line rendering and caret underlines for lexical, syntax, and semantic errors.
 - **A disassembler** for inspecting exactly what the compiler generated, without needing to run it.
-- **Language features**: static types (`num`, `dec`, `flag`, `text`, `none`), arrays of any non-`none` type, variables, arithmetic and comparison operators, short-circuiting `&&`/`||`, `if`/`else`, `loop`, `run` (a C-style for-loop, desugared to `loop` at parse time), user-defined functions, recursion, and `show`.
+- **Language features**: static types (`num`, `dec`, `flag`, `text`, `none`), arrays of any non-`none` type, nominally-typed **structs** — declaration, runtime construction (`new Point(1, 2)`), field read/write (`p.x`, `p.x = 5`), and nested field access/assignment of any chain length (`box.corner.x`, `box.corner.x = 9`) — variables, arithmetic and comparison operators, short-circuiting `&&`/`||`, `if`/`else`, `loop`, `run` (a C-style for-loop, desugared to `loop` at parse time), user-defined functions, recursion, and `show`.
 
 ## Compiler Architecture
 
@@ -407,7 +407,7 @@ See [`examples/semantic/`](examples/semantic) for programs that each demonstrate
 
 Tracked, deliberate gaps — not oversights:
 
-- **Struct types** — in progress, across several small milestones. Currently landed: declarations (S1), and now (S3) a fully real, nominal type — struct-typed variables/parameters/return types/fields, arrays of structs, assignability/argument/return compatibility, and cyclic-struct detection are all implemented. **Not yet usable**: there is no construction syntax (no `new Point(...)`) and no field access or assignment — see [LANGUAGE.md's Structs section](LANGUAGE.md#structs).
+- **Struct types** — feature-complete for everyday use as of Milestone S5, landed across several small milestones: declarations (S1), a fully real, nominal type — struct-typed variables/parameters/return types/fields, arrays of structs, assignability/argument/return compatibility, and cyclic-struct detection (S3), runtime construction, `new Point(1, 2)` (S4), and now field read/write with arbitrary nesting, `p.x`, `p.x = 5`, `box.corner.x = 9` (S5) — the last two backed by a plain `Object[]` at runtime, reusing the array opcodes `ARRAY_GET`/`ARRAY_SET` with zero VM changes and zero new opcodes. **Deliberately still not supported**: there is no way to construct an array of structs (`new Point[5]` is a parse error), and there is no method-call syntax (`point.foo()`) or reflection/dynamic field names — none of these are planned as part of struct support — see [LANGUAGE.md's Structs section](LANGUAGE.md#structs).
 - **`&&` / `||` short-circuit compilation** was tracked here as a known gap and is now implemented — both operators compile to conditional jumps (reusing `JMP`/`JMP_IF_FALSE`, no new opcodes) that skip the right operand entirely when the left already determines the result, identical to Java/C evaluation order; a `.gopi`-level regression example is in [`short_circuit.gopi`](examples/short_circuit.gopi).
 - **Chained assignment's `DUP` opcode** was anticipated from the original bytecode design and is implemented; a `.gopi`-level regression example is in [`assignment_chains.gopi`](examples/assignment_chains.gopi).
 - **Bytecode serialization** (`BytecodeWriter`/`BytecodeReader`) — writing a `BytecodeModule` to a `.gbc` file and reading it back, so compilation and execution can be separate steps.

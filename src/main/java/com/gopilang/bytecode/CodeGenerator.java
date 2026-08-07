@@ -8,6 +8,8 @@ import com.gopilang.ast.BinaryOperator;
 import com.gopilang.ast.BlockStatement;
 import com.gopilang.ast.Expr;
 import com.gopilang.ast.ExpressionStatement;
+import com.gopilang.ast.FieldAccessExpression;
+import com.gopilang.ast.FieldAssignmentExpression;
 import com.gopilang.ast.FunctionCallExpression;
 import com.gopilang.ast.FunctionDeclaration;
 import com.gopilang.ast.GroupingExpression;
@@ -15,17 +17,20 @@ import com.gopilang.ast.IfStatement;
 import com.gopilang.ast.IndexAssignmentExpression;
 import com.gopilang.ast.LiteralExpression;
 import com.gopilang.ast.NewArrayExpression;
+import com.gopilang.ast.NewStructExpression;
 import com.gopilang.ast.Parameter;
 import com.gopilang.ast.PrintStatement;
 import com.gopilang.ast.Program;
 import com.gopilang.ast.ReturnStatement;
 import com.gopilang.ast.Stmt;
+import com.gopilang.ast.StructDeclaration;
 import com.gopilang.ast.UnaryExpression;
 import com.gopilang.ast.VariableDeclaration;
 import com.gopilang.ast.VariableExpression;
 import com.gopilang.ast.WhileStatement;
 import com.gopilang.semantic.FunctionSymbol;
 import com.gopilang.semantic.SemanticModel;
+import com.gopilang.semantic.StructSymbol;
 import com.gopilang.semantic.VariableSymbol;
 import com.gopilang.types.PrimitiveType;
 import com.gopilang.types.TypeRef;
@@ -54,9 +59,11 @@ public final class CodeGenerator {
     private final List<Object> constantPool = new ArrayList<>();
     private final Map<Object, Integer> constantIndices = new HashMap<>();
     private final List<BytecodeFunction> functions = new ArrayList<>();
+    private final List<BytecodeStruct> structs = new ArrayList<>();
     private final List<Instruction> instructions = new ArrayList<>();
     private final Map<VariableSymbol, Integer> slots = new HashMap<>();
     private final Map<FunctionSymbol, Integer> functionIndices = new HashMap<>();
+    private final Map<StructSymbol, Integer> structIndices = new HashMap<>();
 
     public CodeGenerator(Program program, SemanticModel semanticModel) {
         this.program = program;
@@ -64,15 +71,25 @@ public final class CodeGenerator {
     }
 
     /**
-     * Assigns every function a stable index, emits the two-instruction entry
-     * stub ({@code CALL main; HALT}), compiles each function in declaration
-     * order, and returns the assembled module.
+     * Assigns every function a stable index, assigns every struct a stable
+     * index (mirroring the function case exactly — {@code NEW_STRUCT}
+     * addresses {@code structs()} by index just like {@code CALL} addresses
+     * {@code functions()}), emits the two-instruction entry stub ({@code CALL
+     * main; HALT}), compiles each function in declaration order, and returns
+     * the assembled module.
      */
     public BytecodeModule generate() {
         List<FunctionDeclaration> declarations = program.functions();
         for (int i = 0; i < declarations.size(); i++) {
             FunctionSymbol symbol = semanticModel.functionTable().get(declarations.get(i).name());
             functionIndices.put(symbol, i);
+        }
+
+        List<StructDeclaration> structDeclarations = program.structs();
+        for (int i = 0; i < structDeclarations.size(); i++) {
+            StructSymbol symbol = semanticModel.structTable().get(structDeclarations.get(i).name());
+            structIndices.put(symbol, i);
+            structs.add(new BytecodeStruct(symbol.name(), symbol.fields().size()));
         }
 
         FunctionSymbol mainSymbol = semanticModel.functionTable().get("main");
@@ -86,7 +103,20 @@ public final class CodeGenerator {
             compileFunction(function);
         }
 
-        return new BytecodeModule(constantPool, functions, instructions);
+        return new BytecodeModule(constantPool, functions, structs, instructions);
+    }
+
+    // Resolved entirely at code-generation time, from struct.fields()'s
+    // declaration order — no runtime field metadata, no lookup table, since
+    // ARRAY_GET/ARRAY_SET address a struct's Object[] purely by integer index.
+    private int fieldIndex(StructSymbol struct, String fieldName) {
+        List<Parameter> fields = struct.fields();
+        for (int i = 0; i < fields.size(); i++) {
+            if (fields.get(i).name().equals(fieldName)) {
+                return i;
+            }
+        }
+        throw new IllegalStateException("Unknown field '" + fieldName + "' on struct '" + struct.name() + "'");
     }
 
     private int constantIndex(Object value) {
@@ -226,6 +256,63 @@ public final class CodeGenerator {
                 // ARRAY_SET pushes the stored value back itself (unlike plain
                 // STORE), so no DUP is needed here — a single 3-argument
                 // opcode can't be split by DUP the way a 1-slot STORE can.
+                instructions.add(new Instruction(Opcode.ARRAY_SET, 0));
+            }
+            case NewStructExpression construction -> {
+                for (Expr argument : construction.arguments()) {
+                    compileExpr(argument);
+                }
+                // Derived from SemanticModel exactly as approved — no
+                // separate construction-resolution map: expressionTypes()
+                // gives back the TypeRef this construction was typed as,
+                // whose structName() looks up the same StructSymbol in
+                // structTable() that registerStructs() already put there.
+                TypeRef type = semanticModel.expressionTypes().get(construction);
+                if (type == null || type.structName().isEmpty()) {
+                    throw new IllegalStateException("Unresolved NewStructExpression: " + construction.structName());
+                }
+                StructSymbol symbol = semanticModel.structTable().get(type.structName().get());
+                if (symbol == null) {
+                    throw new IllegalStateException("Unknown struct: " + type.structName().get());
+                }
+                Integer structIndex = structIndices.get(symbol);
+                if (structIndex == null) {
+                    throw new IllegalStateException("No struct index for: " + symbol.name());
+                }
+                instructions.add(new Instruction(Opcode.NEW_STRUCT, structIndex));
+            }
+            case FieldAccessExpression access -> {
+                compileExpr(access.target());
+                // Derived from SemanticModel exactly as NewStructExpression
+                // does above: the target's own recorded TypeRef carries the
+                // struct name, which structTable() resolves to a StructSymbol.
+                TypeRef targetType = semanticModel.expressionTypes().get(access.target());
+                if (targetType == null || targetType.structName().isEmpty()) {
+                    throw new IllegalStateException("Unresolved FieldAccessExpression target");
+                }
+                StructSymbol struct = semanticModel.structTable().get(targetType.structName().get());
+                if (struct == null) {
+                    throw new IllegalStateException("Unknown struct: " + targetType.structName().get());
+                }
+                int index = fieldIndex(struct, access.fieldName());
+                instructions.add(new Instruction(Opcode.PUSH_CONST, constantIndex(index)));
+                instructions.add(new Instruction(Opcode.ARRAY_GET, 0));
+            }
+            case FieldAssignmentExpression assignment -> {
+                compileExpr(assignment.target());
+                TypeRef targetType = semanticModel.expressionTypes().get(assignment.target());
+                if (targetType == null || targetType.structName().isEmpty()) {
+                    throw new IllegalStateException("Unresolved FieldAssignmentExpression target");
+                }
+                StructSymbol struct = semanticModel.structTable().get(targetType.structName().get());
+                if (struct == null) {
+                    throw new IllegalStateException("Unknown struct: " + targetType.structName().get());
+                }
+                int index = fieldIndex(struct, assignment.fieldName());
+                instructions.add(new Instruction(Opcode.PUSH_CONST, constantIndex(index)));
+                compileExpr(assignment.value());
+                // ARRAY_SET pushes the stored value back itself, exactly as
+                // IndexAssignmentExpression above relies on for chaining.
                 instructions.add(new Instruction(Opcode.ARRAY_SET, 0));
             }
             default -> throw new UnsupportedOperationException(

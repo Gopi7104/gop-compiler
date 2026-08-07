@@ -1,0 +1,14 @@
+// print_struct_rejection.gopi
+// Expected: 1 diagnostic (TYPE) — "cannot print a value of type 'Point'".
+// A struct value (constructed or not) has no printable representation.
+
+struct Point {
+    num x;
+}
+
+none showPoint(Point p) {
+    show(p);
+}
+
+none main() {
+}

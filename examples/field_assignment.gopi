@@ -1,0 +1,21 @@
+// field_assignment.gopi - writing a struct's field with "." "=" — Milestone
+// S5. point.x = value compiles to exactly the same ARRAY_SET opcode array
+// index assignment already uses. Chained field assignment works for the
+// same reason chained plain assignment does: ARRAY_SET pushes the assigned
+// value back onto the stack, so "a.x = b.x = 5" needs no extra opcode.
+
+struct Point {
+    num x;
+}
+
+none main() {
+    Point a = new Point(0);
+    Point b = new Point(0);
+
+    a.x = 5;
+    show(a.x);
+
+    a.x = b.x = 9;
+    show(a.x);
+    show(b.x);
+}

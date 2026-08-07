@@ -1,0 +1,10 @@
+// field_on_non_struct.gopi
+// Expected: 1 diagnostic (TYPE) — "cannot access field 'y' on non-struct
+// type 'num'". Field access requires a struct-typed target; primitives
+// (and arrays, which fail the same check with their own displayed type)
+// have no fields at all.
+
+none main() {
+    num x = 5;
+    x.y;
+}

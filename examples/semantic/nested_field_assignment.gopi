@@ -1,0 +1,21 @@
+// nested_field_assignment.gopi
+// Expected: 0 diagnostics.
+// b.corner.x = 5 type-checks cleanly: b.corner resolves to a Point-typed
+// target (a struct field, itself struct-typed), and 5 is assignable to
+// its 'x' field's declared 'num' type. Nesting depth doesn't matter to
+// semantic analysis — FieldAssignmentExpression's target is just another
+// expression, recursively typed the same way any other target would be.
+
+struct Point {
+    num x;
+}
+
+struct Box {
+    Point corner;
+}
+
+none main() {
+    Box b = new Box(new Point(0));
+    b.corner.x = 5;
+    show(b.corner.x);
+}

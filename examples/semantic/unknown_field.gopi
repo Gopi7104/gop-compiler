@@ -1,0 +1,13 @@
+// unknown_field.gopi
+// Expected: 1 diagnostic (SEMANTIC) — "struct 'Point' has no field 'y'".
+// Point only declares 'x' — accessing a field that was never declared on
+// the struct is rejected the same way an undefined variable would be.
+
+struct Point {
+    num x;
+}
+
+none main() {
+    Point p = new Point(1);
+    p.y;
+}

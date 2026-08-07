@@ -1,0 +1,19 @@
+// nested_structs.gopi - a struct field that is itself a struct, and
+// constructing one struct directly from inside another's constructor. See
+// nested_fields.gopi for reading/writing through this same shape of nesting
+// (Milestone S5).
+
+struct Point {
+    num x;
+    num y;
+}
+
+struct Rectangle {
+    Point topLeft;
+    Point bottomRight;
+}
+
+none main() {
+    Rectangle r = new Rectangle(new Point(0, 0), new Point(10, 20));
+    show("built a rectangle");
+}

@@ -7,7 +7,10 @@ package com.gopilang.bytecode;
  * per-type variants, no object model, unlike the much larger JVM instruction
  * set. Array values are plain {@code Object[]} at runtime; the array opcodes
  * ({@code NEW_ARRAY}/{@code ARRAY_GET}/{@code ARRAY_SET}/{@code
- * ARRAY_LENGTH}) operate on that reference directly.
+ * ARRAY_LENGTH}) operate on that reference directly. A struct instance is
+ * also a plain {@code Object[]} (one slot per field, declaration order) —
+ * {@code NEW_STRUCT} is the only struct-specific opcode; there is no
+ * dedicated runtime struct type, matching arrays exactly.
  */
 public enum Opcode {
 
@@ -49,6 +52,9 @@ public enum Opcode {
     ARRAY_GET,
     ARRAY_SET,
     ARRAY_LENGTH,
+
+    // Structs
+    NEW_STRUCT,
 
     // I/O
     PRINT,

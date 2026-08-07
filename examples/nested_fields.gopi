@@ -1,0 +1,23 @@
+// nested_fields.gopi - a struct field that is itself a struct, read and
+// written through arbitrary chains ("box.corner.x") — Milestone S5. No
+// special-case codegen exists for this: FieldAccessExpression/
+// FieldAssignmentExpression recurse into their own target exactly like
+// every other expression, so a chain of any length falls out for free.
+
+struct Point {
+    num x;
+    num y;
+}
+
+struct Box {
+    Point corner;
+}
+
+none main() {
+    Box b = new Box(new Point(1, 2));
+    show(b.corner.x);
+
+    b.corner.x = 99;
+    show(b.corner.x);
+    show(b.corner.y);
+}

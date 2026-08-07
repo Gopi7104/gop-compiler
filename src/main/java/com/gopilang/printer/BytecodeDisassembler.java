@@ -2,6 +2,7 @@ package com.gopilang.printer;
 
 import com.gopilang.bytecode.BytecodeFunction;
 import com.gopilang.bytecode.BytecodeModule;
+import com.gopilang.bytecode.BytecodeStruct;
 import com.gopilang.bytecode.Instruction;
 import com.gopilang.bytecode.Opcode;
 
@@ -17,12 +18,14 @@ public final class BytecodeDisassembler {
     private BytecodeDisassembler() {
     }
 
-    /** Renders {@code module}'s constant pool, function table, and instruction listing. */
+    /** Renders {@code module}'s constant pool, function table, struct table, and instruction listing. */
     public static String disassemble(BytecodeModule module) {
         StringBuilder out = new StringBuilder();
         printConstantPool(module, out);
         out.append('\n');
         printFunctions(module, out);
+        out.append('\n');
+        printStructs(module, out);
         out.append('\n');
         printInstructions(module, out);
         return out.toString();
@@ -53,6 +56,17 @@ public final class BytecodeDisassembler {
         }
     }
 
+    private static void printStructs(BytecodeModule module, StringBuilder out) {
+        out.append("Structs\n");
+        out.append("-------\n");
+        for (int i = 0; i < module.structs().size(); i++) {
+            BytecodeStruct struct = module.structs().get(i);
+            out.append(i).append(' ').append(struct.name()).append('\n');
+            out.append("  fields:").append(struct.fieldCount()).append('\n');
+            out.append('\n');
+        }
+    }
+
     private static void printInstructions(BytecodeModule module, StringBuilder out) {
         out.append("Instructions\n");
         out.append("------------\n");
@@ -68,7 +82,7 @@ public final class BytecodeDisassembler {
 
     private static boolean hasOperand(Opcode opcode) {
         return switch (opcode) {
-            case PUSH_CONST, LOAD, STORE, CALL, JMP, JMP_IF_FALSE -> true;
+            case PUSH_CONST, LOAD, STORE, CALL, JMP, JMP_IF_FALSE, NEW_STRUCT -> true;
             default -> false;
         };
     }

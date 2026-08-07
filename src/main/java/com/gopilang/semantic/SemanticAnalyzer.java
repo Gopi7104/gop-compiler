@@ -7,6 +7,8 @@ import com.gopilang.ast.BinaryExpression;
 import com.gopilang.ast.BlockStatement;
 import com.gopilang.ast.Expr;
 import com.gopilang.ast.ExpressionStatement;
+import com.gopilang.ast.FieldAccessExpression;
+import com.gopilang.ast.FieldAssignmentExpression;
 import com.gopilang.ast.FunctionCallExpression;
 import com.gopilang.ast.FunctionDeclaration;
 import com.gopilang.ast.GroupingExpression;
@@ -14,6 +16,7 @@ import com.gopilang.ast.IfStatement;
 import com.gopilang.ast.IndexAssignmentExpression;
 import com.gopilang.ast.LiteralExpression;
 import com.gopilang.ast.NewArrayExpression;
+import com.gopilang.ast.NewStructExpression;
 import com.gopilang.ast.Parameter;
 import com.gopilang.ast.PrintStatement;
 import com.gopilang.ast.Program;
@@ -600,6 +603,27 @@ public final class SemanticAnalyzer {
                 analyzeExpr(indexAssignment.index());
                 analyzeExpr(indexAssignment.value());
             }
+            case NewStructExpression construction -> {
+                for (Expr argument : construction.arguments()) {
+                    analyzeExpr(argument);
+                }
+                // Reuses resolveDeclaredType() verbatim (the same "undefined
+                // struct" check/diagnostic already used for a variable,
+                // parameter, return, or field type) rather than a parallel
+                // check — a struct name is a struct name regardless of
+                // whether it appears in a type position or a construction.
+                resolveDeclaredType(
+                        new TypeRef(PrimitiveType.BOOL, false, Optional.of(construction.structName())),
+                        construction.range());
+            }
+            // Placeholder only — real field resolution/type checking is
+            // Milestone S5 Phase 2's scope; this exists so the switch stays
+            // exhaustive for Phase 1 (parser/AST).
+            case FieldAccessExpression access -> analyzeExpr(access.target());
+            case FieldAssignmentExpression assignment -> {
+                analyzeExpr(assignment.target());
+                analyzeExpr(assignment.value());
+            }
         }
     }
 
@@ -845,7 +869,140 @@ public final class SemanticAnalyzer {
                 }
                 yield recordType(indexAssignment, elementType);
             }
+
+            // Milestone S4 Phase 2: mirrors the FunctionCallExpression case
+            // immediately above exactly — argument count, then per-position
+            // argument-type compatibility via the existing, unmodified
+            // TypeRules.isArgumentCompatible() (no parallel type-checking
+            // logic). structTable.get(...) here is a second, idempotent
+            // lookup of the same fact resolveDeclaredType() already checked
+            // in analyzeExpr — there is no per-construction resolution map
+            // to read instead (SemanticModel gains no new map for this;
+            // CodeGenerator can already get from this TypeRef's structName()
+            // back to the same StructSymbol via structTable()).
+            case NewStructExpression construction -> {
+                List<Optional<TypeRef>> argumentTypes = new ArrayList<>();
+                for (Expr argument : construction.arguments()) {
+                    argumentTypes.add(typeOf(argument));
+                }
+
+                StructSymbol structSymbol = structTable.get(construction.structName());
+                if (structSymbol == null) {
+                    yield Optional.empty(); // already reported in analyzeExpr
+                }
+
+                List<TypeRef> fieldTypes = structSymbol.fields().stream().map(Parameter::type).toList();
+                if (argumentTypes.size() != fieldTypes.size()) {
+                    reporter.report(new Diagnostic(
+                            ErrorPhase.TYPE,
+                            construction.range(),
+                            "struct '" + construction.structName() + "' expects " + fieldTypes.size()
+                                    + " argument(s), found " + argumentTypes.size(),
+                            null));
+                }
+
+                int checked = Math.min(argumentTypes.size(), fieldTypes.size());
+                for (int i = 0; i < checked; i++) {
+                    Optional<TypeRef> argumentType = argumentTypes.get(i);
+                    if (argumentType.isEmpty()) {
+                        continue; // already poisoned/reported upstream
+                    }
+                    TypeRef fieldType = fieldTypes.get(i);
+                    if (!TypeRules.isArgumentCompatible(argumentType.get(), fieldType)) {
+                        reporter.report(new Diagnostic(
+                                ErrorPhase.TYPE,
+                                construction.range(),
+                                "argument " + (i + 1) + " of struct '" + construction.structName()
+                                        + "': expected '" + fieldType.displayName() + "', found '"
+                                        + argumentType.get().displayName() + "'",
+                                null));
+                    }
+                }
+
+                yield recordType(construction,
+                        new TypeRef(PrimitiveType.BOOL, false, Optional.of(construction.structName())));
+            }
+
+            case FieldAccessExpression access -> {
+                Optional<TypeRef> targetType = typeOf(access.target());
+                if (targetType.isEmpty()) {
+                    yield Optional.empty();
+                }
+                if (targetType.get().isArray() || targetType.get().structName().isEmpty()) {
+                    reporter.report(new Diagnostic(
+                            ErrorPhase.TYPE,
+                            access.range(),
+                            "cannot access field '" + access.fieldName() + "' on non-struct type '"
+                                    + targetType.get().displayName() + "'",
+                            null));
+                    yield Optional.empty();
+                }
+                StructSymbol structSymbol = structTable.get(targetType.get().structName().get());
+                if (structSymbol == null) {
+                    yield Optional.empty(); // undefined struct already reported at the target's declaration
+                }
+                Optional<Parameter> field = resolveField(structSymbol, access.fieldName(), access.range());
+                if (field.isEmpty()) {
+                    yield Optional.empty();
+                }
+                yield recordType(access, field.get().type());
+            }
+
+            case FieldAssignmentExpression assignment -> {
+                Optional<TypeRef> targetType = typeOf(assignment.target());
+                Optional<TypeRef> valueType = typeOf(assignment.value());
+
+                if (targetType.isEmpty()) {
+                    yield Optional.empty();
+                }
+                if (targetType.get().isArray() || targetType.get().structName().isEmpty()) {
+                    reporter.report(new Diagnostic(
+                            ErrorPhase.TYPE,
+                            assignment.range(),
+                            "cannot access field '" + assignment.fieldName() + "' on non-struct type '"
+                                    + targetType.get().displayName() + "'",
+                            null));
+                    yield Optional.empty();
+                }
+                StructSymbol structSymbol = structTable.get(targetType.get().structName().get());
+                if (structSymbol == null) {
+                    yield Optional.empty(); // undefined struct already reported at the target's declaration
+                }
+                Optional<Parameter> field = resolveField(structSymbol, assignment.fieldName(), assignment.range());
+                if (field.isEmpty() || valueType.isEmpty()) {
+                    yield Optional.empty();
+                }
+                TypeRef fieldType = field.get().type();
+                if (!TypeRules.isAssignable(valueType.get(), fieldType)) {
+                    reporter.report(new Diagnostic(
+                            ErrorPhase.TYPE,
+                            assignment.range(),
+                            "cannot assign '" + valueType.get().displayName() + "' to field of type '"
+                                    + fieldType.displayName() + "'",
+                            null));
+                    yield Optional.empty();
+                }
+                yield recordType(assignment, fieldType);
+            }
         };
+    }
+
+    // Reused verbatim by both FieldAccessExpression and
+    // FieldAssignmentExpression — field lookup always happens directly
+    // against structTable.get(...).fields(), never through a cached map, so
+    // there is exactly one place this scan and its diagnostic live.
+    private Optional<Parameter> resolveField(StructSymbol struct, String fieldName, SourceRange range) {
+        Optional<Parameter> field = struct.fields().stream()
+                .filter(candidate -> candidate.name().equals(fieldName))
+                .findFirst();
+        if (field.isEmpty()) {
+            reporter.report(new Diagnostic(
+                    ErrorPhase.SEMANTIC,
+                    range,
+                    "struct '" + struct.name() + "' has no field '" + fieldName + "'",
+                    null));
+        }
+        return field;
     }
 
     private Optional<TypeRef> recordType(Expr expr, TypeRef type) {

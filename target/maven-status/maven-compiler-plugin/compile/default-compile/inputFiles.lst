@@ -7,6 +7,8 @@
 /Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/ast/BlockStatement.java
 /Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/ast/Expr.java
 /Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/ast/ExpressionStatement.java
+/Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/ast/FieldAccessExpression.java
+/Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/ast/FieldAssignmentExpression.java
 /Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/ast/FunctionCallExpression.java
 /Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/ast/FunctionDeclaration.java
 /Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/ast/GroupingExpression.java
@@ -14,6 +16,7 @@
 /Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/ast/IndexAssignmentExpression.java
 /Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/ast/LiteralExpression.java
 /Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/ast/NewArrayExpression.java
+/Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/ast/NewStructExpression.java
 /Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/ast/Parameter.java
 /Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/ast/PrintStatement.java
 /Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/ast/Program.java
@@ -28,6 +31,7 @@
 /Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/ast/package-info.java
 /Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/bytecode/BytecodeFunction.java
 /Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/bytecode/BytecodeModule.java
+/Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/bytecode/BytecodeStruct.java
 /Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/bytecode/CodeGenerator.java
 /Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/bytecode/Instruction.java
 /Users/sgopinath/Desktop/gop-compiler/src/main/java/com/gopilang/bytecode/Opcode.java

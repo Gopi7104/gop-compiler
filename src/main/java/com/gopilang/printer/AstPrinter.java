@@ -7,6 +7,8 @@ import com.gopilang.ast.BinaryExpression;
 import com.gopilang.ast.BlockStatement;
 import com.gopilang.ast.Expr;
 import com.gopilang.ast.ExpressionStatement;
+import com.gopilang.ast.FieldAccessExpression;
+import com.gopilang.ast.FieldAssignmentExpression;
 import com.gopilang.ast.FunctionCallExpression;
 import com.gopilang.ast.FunctionDeclaration;
 import com.gopilang.ast.GroupingExpression;
@@ -14,6 +16,7 @@ import com.gopilang.ast.IfStatement;
 import com.gopilang.ast.IndexAssignmentExpression;
 import com.gopilang.ast.LiteralExpression;
 import com.gopilang.ast.NewArrayExpression;
+import com.gopilang.ast.NewStructExpression;
 import com.gopilang.ast.Parameter;
 import com.gopilang.ast.PrintStatement;
 import com.gopilang.ast.Program;
@@ -169,6 +172,20 @@ public final class AstPrinter {
                     "IndexAssignmentExpression",
                     List.of(describe(indexAssignment.array()), describe(indexAssignment.index()),
                             describe(indexAssignment.value())));
+            case NewStructExpression construction -> {
+                List<TreeNode> children = new ArrayList<>();
+                for (Expr argument : construction.arguments()) {
+                    children.add(describe(argument));
+                }
+                String label = "NewStructExpression " + construction.structName()
+                        + "(" + construction.arguments().size() + " args)";
+                yield new TreeNode(label, children);
+            }
+            case FieldAccessExpression access -> new TreeNode(
+                    "FieldAccessExpression ." + access.fieldName(), List.of(describe(access.target())));
+            case FieldAssignmentExpression assignment -> new TreeNode(
+                    "FieldAssignmentExpression ." + assignment.fieldName() + " =",
+                    List.of(describe(assignment.target()), describe(assignment.value())));
         };
     }
 }

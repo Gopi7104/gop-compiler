@@ -2,6 +2,7 @@ package com.gopilang.vm;
 
 import com.gopilang.bytecode.BytecodeFunction;
 import com.gopilang.bytecode.BytecodeModule;
+import com.gopilang.bytecode.BytecodeStruct;
 import com.gopilang.bytecode.Instruction;
 import com.gopilang.bytecode.Opcode;
 
@@ -137,6 +138,17 @@ public final class VirtualMachine {
                 case ARRAY_LENGTH -> {
                     Object[] array = (Object[]) frame.operandStack().pop();
                     frame.operandStack().push(array.length);
+                }
+                case NEW_STRUCT -> {
+                    BytecodeStruct target = module.structs().get(instruction.operand());
+                    Object[] fields = new Object[target.fieldCount()];
+                    // Same reverse-pop convention as CALL: the last-pushed
+                    // argument is the last field, so it lands in the highest
+                    // index first.
+                    for (int i = target.fieldCount() - 1; i >= 0; i--) {
+                        fields[i] = frame.operandStack().pop();
+                    }
+                    frame.operandStack().push(fields);
                 }
                 case HALT -> {
                     return;

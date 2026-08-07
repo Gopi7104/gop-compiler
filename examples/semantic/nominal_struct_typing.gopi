@@ -1,0 +1,19 @@
+// nominal_struct_typing.gopi
+// Expected: 1 diagnostic (TYPE) — "cannot assign 'Line' to variable of type
+// 'Point'". Point and Line have IDENTICAL field shapes (one num field each),
+// but struct typing is nominal, not structural — matching shape is not enough.
+
+struct Point {
+    num x;
+}
+
+struct Line {
+    num x;
+}
+
+none f(Point p, Line l) {
+    p = l;
+}
+
+none main() {
+}

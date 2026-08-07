@@ -760,4 +760,327 @@ class SemanticAnalyzerTest {
             assertNoDiagnostics("struct Point { num x; } none main() { num p; }");
         }
     }
+
+    // Milestone S4, v3: struct construction, "new StructName(...)". Every
+    // rule here reuses S3's existing machinery directly — TypeRules.
+    // isArgumentCompatible() for argument-type checking, resolveDeclaredType()
+    // for undefined-struct resolution, and the SAME TypeRef(..., structName)
+    // representation for the expression's own type — rather than introducing
+    // any parallel logic or a new SemanticModel map.
+    @Nested
+    class NewStructExpressions {
+
+        @Test
+        void validConstructionIsAccepted() {
+            assertNoDiagnostics(
+                    "struct Point { num x; num y; } none main() { Point p = new Point(1, 2); }");
+        }
+
+        @Test
+        void zeroFieldStructConstructionIsAccepted() {
+            assertNoDiagnostics("struct Empty { } none main() { Empty e = new Empty(); }");
+        }
+
+        @Test
+        void undefinedStructConstructionIsRejected() {
+            Diagnostic d = assertSingleDiagnostic("none main() { new NotAStruct(); }", ErrorPhase.SEMANTIC);
+            assertTrue(d.message().contains("undefined struct 'NotAStruct'"));
+        }
+
+        @Test
+        void tooFewConstructorArgumentsIsRejected() {
+            Diagnostic d = assertSingleDiagnostic(
+                    "struct Point { num x; num y; } none main() { new Point(1); }", ErrorPhase.TYPE);
+            assertTrue(d.message().contains("struct 'Point' expects 2 argument(s), found 1"));
+        }
+
+        @Test
+        void tooManyConstructorArgumentsIsRejected() {
+            Diagnostic d = assertSingleDiagnostic(
+                    "struct Point { num x; num y; } none main() { new Point(1, 2, 3); }", ErrorPhase.TYPE);
+            assertTrue(d.message().contains("struct 'Point' expects 2 argument(s), found 3"));
+        }
+
+        @Test
+        void zeroFieldStructWithAnArgumentIsRejected() {
+            Diagnostic d = assertSingleDiagnostic(
+                    "struct Empty { } none main() { new Empty(1); }", ErrorPhase.TYPE);
+            assertTrue(d.message().contains("struct 'Empty' expects 0 argument(s), found 1"));
+        }
+
+        @Test
+        void wrongConstructorArgumentTypeIsRejected() {
+            Diagnostic d = assertSingleDiagnostic(
+                    "struct Point { num x; num y; } none main() { new Point(1, yes); }", ErrorPhase.TYPE);
+            assertTrue(d.message().contains("argument 2 of struct 'Point'"));
+        }
+
+        @Test
+        void wideningConstructorArgumentIsAllowed() {
+            // Same TypeRules.isAssignable/isArgumentCompatible rule as a
+            // plain function call — int widens to float positionally.
+            assertNoDiagnostics("struct Point { dec x; } none main() { Point p = new Point(1); }");
+        }
+
+        @Test
+        void forwardReferenceConstructionResolves() {
+            // Point is constructed before its own declaration in the file.
+            assertNoDiagnostics("none main() { new Point(1); } struct Point { num x; }");
+        }
+
+        @Test
+        void nestedConstructionIsAccepted() {
+            assertNoDiagnostics(
+                    "struct Point { num x; } struct Box { Point corner; } "
+                            + "none main() { Box b = new Box(new Point(1)); }");
+        }
+
+        @Test
+        void returnCompatibilitySucceeds() {
+            assertNoDiagnostics("struct Point { num x; } Point make() { give new Point(1); } none main() { }");
+        }
+
+        @Test
+        void returnCompatibilityIsRejected() {
+            Diagnostic d = assertSingleDiagnostic(
+                    "struct Point { num x; } struct Line { num x; } "
+                            + "Point make() { give new Line(1); } none main() { }",
+                    ErrorPhase.TYPE);
+            assertTrue(d.message().contains("cannot return 'Line' from a function declared to return 'Point'"));
+        }
+
+        @Test
+        void functionArgumentCompatibilitySucceeds() {
+            assertNoDiagnostics(
+                    "struct Point { num x; } none takes(Point p) { } "
+                            + "none main() { takes(new Point(1)); }");
+        }
+
+        @Test
+        void functionArgumentCompatibilityIsRejected() {
+            Diagnostic d = assertSingleDiagnostic(
+                    "struct Point { num x; } struct Line { num x; } none takes(Point p) { } "
+                            + "none main() { takes(new Line(1)); }",
+                    ErrorPhase.TYPE);
+            assertTrue(d.message().contains("argument 1 of 'takes': expected 'Point', found 'Line'"));
+        }
+
+        @Test
+        void nominalTypingRejectsAStructurallyIdenticalStruct() {
+            // Point and Line have identical field shapes — rejected only
+            // because struct typing is nominal, not structural.
+            Diagnostic d = assertSingleDiagnostic(
+                    "struct Point { num x; } struct Line { num x; } "
+                            + "none main() { Point p = new Line(1); }",
+                    ErrorPhase.TYPE);
+            assertTrue(d.message().contains("cannot assign 'Line' to variable of type 'Point'"));
+        }
+
+        @Test
+        void printingAConstructedStructIsRejected() {
+            Diagnostic d = assertSingleDiagnostic(
+                    "struct Point { num x; } none main() { show(new Point(1)); }", ErrorPhase.TYPE);
+            assertTrue(d.message().contains("cannot print a value of type 'Point'"));
+        }
+
+        // Regression: plain FunctionCallExpression argument-count/type
+        // checking (SemanticAnalyzerTest.ArgumentCount/ArgumentType) is
+        // untouched by the NewStructExpression cases added alongside it in
+        // the same two switches.
+        @Test
+        void plainFunctionCallArgumentCountIsUnaffected() {
+            Diagnostic d = assertSingleDiagnostic(
+                    "num add(num a, num b) { give a + b; } none main() { show(add(1)); }", ErrorPhase.TYPE);
+            assertTrue(d.message().contains("expects 2 argument(s), found 1"));
+        }
+
+        @Test
+        void plainFunctionCallArgumentTypeIsUnaffected() {
+            Diagnostic d = assertSingleDiagnostic(
+                    "num add(num a, num b) { give a + b; } none main() { show(add(1, yes)); }", ErrorPhase.TYPE);
+            assertTrue(d.message().contains("argument 2 of 'add'"));
+        }
+    }
+
+    // Milestone S5, v3: struct field access and assignment, "target.field"
+    // and "target.field = value". Every rule here reuses existing
+    // infrastructure directly — TypeRules.isAssignable() (unmodified) for
+    // assignment compatibility, the existing isPrintable/resultOfBinary
+    // checks for a field's resolved type, and the existing VariableExpression
+    // definite-assignment check for the target itself. Field lookup always
+    // scans structTable.get(...).fields() directly via resolveField() — no
+    // cached map anywhere.
+    @Nested
+    class FieldAccessExpressions {
+
+        @Test
+        void validFieldReadSucceeds() {
+            assertNoDiagnostics(
+                    "struct Point { num x; num y; } "
+                            + "none main() { Point p = new Point(1, 2); num n = p.x; show(n); }");
+        }
+
+        @Test
+        void validFieldWriteSucceeds() {
+            assertNoDiagnostics("struct Point { num x; } none main() { Point p = new Point(1); p.x = 5; }");
+        }
+
+        @Test
+        void nestedFieldReadSucceeds() {
+            assertNoDiagnostics(
+                    "struct Point { num x; } struct Box { Point corner; } "
+                            + "none main() { Box b = new Box(new Point(1)); num n = b.corner.x; }");
+        }
+
+        @Test
+        void nestedFieldWriteSucceeds() {
+            assertNoDiagnostics(
+                    "struct Point { num x; } struct Box { Point corner; } "
+                            + "none main() { Box b = new Box(new Point(1)); b.corner.x = 5; }");
+        }
+
+        @Test
+        void unknownFieldIsRejected() {
+            Diagnostic d = assertSingleDiagnostic(
+                    "struct Point { num x; } none main() { Point p = new Point(1); num n = p.y; }",
+                    ErrorPhase.SEMANTIC);
+            assertTrue(d.message().contains("struct 'Point' has no field 'y'"));
+        }
+
+        @Test
+        void fieldAccessOnPrimitiveIsRejected() {
+            Diagnostic d = assertSingleDiagnostic(
+                    "none main() { num n = 5; num m = n.x; }", ErrorPhase.TYPE);
+            assertTrue(d.message().contains("cannot access field 'x' on non-struct type 'num'"));
+        }
+
+        @Test
+        void fieldAccessOnArrayIsRejected() {
+            // A Point[]-typed PARAMETER (begins definitely assigned) — arrays
+            // of structs can't be constructed, so this is the only way to
+            // get one without a definite-assignment cascade obscuring the
+            // one diagnostic this test is about.
+            Diagnostic d = assertSingleDiagnostic(
+                    "struct Point { num x; } none f(Point[] arr) { num n = arr.x; } none main() { }",
+                    ErrorPhase.TYPE);
+            assertTrue(d.message().contains("cannot access field 'x' on non-struct type 'Point[]'"));
+        }
+
+        @Test
+        void wrongFieldAssignmentTypeIsRejected() {
+            Diagnostic d = assertSingleDiagnostic(
+                    "struct Point { num x; } none main() { Point p = new Point(1); p.x = yes; }", ErrorPhase.TYPE);
+            assertTrue(d.message().contains("cannot assign 'flag' to field of type 'num'"));
+        }
+
+        @Test
+        void wideningFieldAssignmentIsAllowed() {
+            assertNoDiagnostics(
+                    "struct Point { dec x; } none main() { Point p = new Point(1.0); p.x = 5; }");
+        }
+
+        @Test
+        void nominalTypingIsPreservedThroughFieldAccess() {
+            // Point and Line have identical shapes — a Point-typed field's
+            // read result must still be nominally a Point, not merely
+            // "something with field x".
+            Diagnostic d = assertSingleDiagnostic(
+                    "struct Point { num x; } struct Line { num x; } struct Box { Point corner; } "
+                            + "none main() { Box b = new Box(new Point(1)); Line l = b.corner; }",
+                    ErrorPhase.TYPE);
+            assertTrue(d.message().contains("cannot assign 'Point' to variable of type 'Line'"));
+        }
+
+        @Test
+        void tripleNestedFieldAccessPropagatesCorrectly() {
+            assertNoDiagnostics(
+                    "struct Point { num x; } struct Box { Point corner; } struct Container { Box box; } "
+                            + "none main() { Container c = new Container(new Box(new Point(1))); "
+                            + "num n = c.box.corner.x; }");
+        }
+
+        @Test
+        void undefinedStructFieldAccessDoesNotCascade() {
+            // A parameter (begins definitely assigned), not a plain
+            // declaration — isolates this test to exactly the one
+            // "undefined struct" diagnostic this test is about, rather than
+            // also tripping the (separate, correct, but irrelevant here)
+            // definite-assignment check.
+            Diagnostic d = assertSingleDiagnostic(
+                    "none f(NotAStruct n) { n.x; } none main() { }", ErrorPhase.SEMANTIC);
+            assertTrue(d.message().contains("undefined struct 'NotAStruct'"));
+        }
+
+        @Test
+        void printingAPrimitiveFieldSucceeds() {
+            assertNoDiagnostics("struct Point { num x; } none main() { Point p = new Point(1); show(p.x); }");
+        }
+
+        @Test
+        void printingAStructFieldIsRejected() {
+            Diagnostic d = assertSingleDiagnostic(
+                    "struct Point { num x; } struct Box { Point corner; } "
+                            + "none main() { Box b = new Box(new Point(1)); show(b.corner); }",
+                    ErrorPhase.TYPE);
+            assertTrue(d.message().contains("cannot print a value of type 'Point'"));
+        }
+
+        @Test
+        void operatorOnPrimitiveFieldSucceeds() {
+            assertNoDiagnostics(
+                    "struct Point { num x; } none main() { Point p = new Point(1); num n = p.x + 1; }");
+        }
+
+        @Test
+        void operatorOnStructFieldIsRejected() {
+            Diagnostic d = assertSingleDiagnostic(
+                    "struct Point { num x; } struct Box { Point corner; } "
+                            + "none main() { Box b = new Box(new Point(1)); b.corner + 1; }",
+                    ErrorPhase.TYPE);
+            assertTrue(d.message().contains("operator '+' cannot be applied to 'Point' and 'num'"));
+        }
+
+        @Test
+        void definiteAssignmentCheckIsReusedForFieldAccessTarget() {
+            Diagnostic d = assertSingleDiagnostic(
+                    "struct Point { num x; } none main() { Point p; show(p.x); }", ErrorPhase.SEMANTIC);
+            assertTrue(d.message().contains("variable 'p' might not have been assigned a value"));
+        }
+
+        @Test
+        void returnCompatibilityThroughFieldAccessSucceeds() {
+            assertNoDiagnostics(
+                    "struct Point { num x; } struct Box { Point corner; } "
+                            + "num getX(Box b) { give b.corner.x; } none main() { }");
+        }
+
+        @Test
+        void argumentCompatibilityThroughFieldAccessSucceeds() {
+            assertNoDiagnostics(
+                    "struct Point { num x; } struct Box { Point corner; } none takesNum(num n) { } "
+                            + "none main() { Box b = new Box(new Point(1)); takesNum(b.corner.x); }");
+        }
+
+        @Test
+        void chainedFieldAssignmentSucceeds() {
+            assertNoDiagnostics(
+                    "struct Point { num x; } "
+                            + "none main() { Point a = new Point(1); Point b = new Point(2); a.x = b.x = 5; }");
+        }
+
+        @Test
+        void plainFunctionCallsAreUnaffected() {
+            assertNoDiagnostics("num add(num a, num b) { give a + b; } none main() { show(add(1, 2)); }");
+        }
+
+        @Test
+        void plainArraysAreUnaffected() {
+            assertNoDiagnostics("none main() { num[] arr = new num[3]; arr[0] = 5; show(arr[0]); }");
+        }
+
+        @Test
+        void plainStructConstructionIsUnaffected() {
+            assertNoDiagnostics("struct Point { num x; } none main() { Point p = new Point(1); }");
+        }
+    }
 }

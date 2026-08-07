@@ -1,0 +1,15 @@
+// field_access.gopi - reading a struct's fields with "." — Milestone S5.
+// point.x compiles to exactly the same ARRAY_GET opcode array indexing
+// already uses; the field name is resolved to an integer index entirely at
+// compile time (see LANGUAGE.md's Structs section for the full rule).
+
+struct Point {
+    num x;
+    num y;
+}
+
+none main() {
+    Point p = new Point(3, 4);
+    show(p.x);
+    show(p.y);
+}
